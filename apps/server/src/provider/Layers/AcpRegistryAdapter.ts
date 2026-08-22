@@ -49,9 +49,20 @@ import {
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
   makeAcpRequestResolvedEvent,
+  makeAcpTaskEvent,
   makeAcpToolCallEvent,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import { parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
+import {
+  ACP_SUBAGENT_EVENT_METHOD,
+  agentAdvertisesContextivitySubagentEvents,
+  summarizeAcpSubagentEvent,
+} from "../acp/ContextivityAcpExtension.ts";
+import {
+  emptyContextivitySubagentMapperState,
+  mapContextivitySubagentEvent,
+  type ContextivitySubagentMapperState,
+} from "../acp/ContextivityAcpSubagentMapper.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
 import {
   applyAcpRegistryConfigOptionSelections,
@@ -112,6 +123,8 @@ interface AcpRegistrySessionContext {
   promptsInFlight: number;
   currentModelId: string | undefined;
   stopped: boolean;
+  subagentEventsEnabled: boolean;
+  subagentMapperState: ContextivitySubagentMapperState;
 }
 
 function settlePendingApprovalsAsCancelled(
@@ -732,6 +745,10 @@ export function makeAcpRegistryAdapter(
             promptsInFlight: 0,
             currentModelId: boundModelId,
             stopped: false,
+            subagentEventsEnabled: agentAdvertisesContextivitySubagentEvents(
+              started.initializeResult.agentCapabilities,
+            ),
+            subagentMapperState: emptyContextivitySubagentMapperState(),
           };
 
           const nf = yield* Stream.runDrain(
@@ -750,6 +767,38 @@ export function makeAcpRegistryAdapter(
                 }
 
                 if (event._tag === "ModeChanged") {
+                  return;
+                }
+
+                if (event._tag === "ContextivitySubagentEvent") {
+                  yield* logNative(
+                    ctx.threadId,
+                    ACP_SUBAGENT_EVENT_METHOD,
+                    summarizeAcpSubagentEvent(event.payload),
+                  );
+                  if (!ctx.subagentEventsEnabled || event.payload.sessionId !== ctx.acpSessionId) {
+                    return;
+                  }
+                  const mapped = mapContextivitySubagentEvent(
+                    event.payload,
+                    ctx.subagentMapperState,
+                  );
+                  ctx.subagentMapperState = mapped.state;
+                  const turnId = resolveNotificationTurnId(ctx);
+                  for (const mappedEvent of mapped.events) {
+                    yield* offerRuntimeEvent(
+                      makeAcpTaskEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId,
+                        event: mappedEvent,
+                        source: "acp.contextivity.extension",
+                        method: ACP_SUBAGENT_EVENT_METHOD,
+                        rawPayload: summarizeAcpSubagentEvent(event.payload),
+                      }),
+                    );
+                  }
                   return;
                 }
 

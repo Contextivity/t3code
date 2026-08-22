@@ -17,6 +17,7 @@ import * as TestClock from "effect/testing/TestClock";
 import {
   AcpRegistrySettings,
   ApprovalRequestId,
+  classifyTaskAgentKind,
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -70,6 +71,49 @@ async function readJsonLines(filePath: string) {
 const acpRegistryAdapterTestLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3code-acp-registry-adapter-test-",
 }).pipe(Layer.provideMerge(NodeServices.layer));
+
+const isTaskRuntimeEvent = (
+  event: ProviderRuntimeEvent,
+): event is Extract<
+  ProviderRuntimeEvent,
+  { type: "task.started" | "task.progress" | "task.updated" | "task.completed" }
+> =>
+  event.type === "task.started" ||
+  event.type === "task.progress" ||
+  event.type === "task.updated" ||
+  event.type === "task.completed";
+
+const collectUntil = (
+  adapter: { readonly streamEvents: Stream.Stream<ProviderRuntimeEvent> },
+  predicate: (events: ReadonlyArray<ProviderRuntimeEvent>) => boolean,
+) =>
+  Effect.gen(function* () {
+    const runtimeEvents: ProviderRuntimeEvent[] = [];
+    const done = yield* Deferred.make<void>();
+    const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+      Effect.gen(function* () {
+        runtimeEvents.push(event);
+        if (predicate(runtimeEvents)) {
+          yield* Deferred.succeed(done, undefined);
+        }
+      }),
+    ).pipe(Effect.forkChild);
+    return { runtimeEvents, done, runtimeEventsFiber };
+  });
+
+const initializeClientSubagentEventsVersion = (
+  requests: ReadonlyArray<Record<string, unknown>>,
+) => {
+  const initialize = requests.find((entry) => entry.method === "initialize");
+  const params = initialize?.params as
+    | {
+        clientCapabilities?: {
+          _meta?: { contextivity?: { subagentEvents?: { version?: unknown } } };
+        };
+      }
+    | undefined;
+  return params?.clientCapabilities?._meta?.contextivity?.subagentEvents?.version;
+};
 
 const makeTestAdapter = (
   input: { readonly binaryPath: string } & Partial<AcpRegistrySettings>,
@@ -770,5 +814,414 @@ it.layer(acpRegistryAdapterTestLayer)("AcpRegistryAdapterLive", (it) => {
       yield* Fiber.interrupt(runtimeEventsFiber);
       yield* adapter.stopSession(threadId);
     }).pipe(TestClock.withLive),
+  );
+
+  it.effect(
+    "advertises client subagent-event caps and maps a session snapshot without a turn",
+    () =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("acp-registry-subagent-snapshot");
+        const tempDir = yield* Effect.promise(() =>
+          NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "acp-registry-subagent-snapshot-")),
+        );
+        const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+        const wrapperPath = yield* Effect.promise(() =>
+          makeMockAcpRegistryWrapper({
+            T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+            T3_ACP_ADVERTISE_SUBAGENT_EVENTS: "1",
+            T3_ACP_SUBAGENT_SCENARIO: "snapshot",
+          }),
+        );
+        const adapter = yield* makeTestAdapter({ binaryPath: wrapperPath });
+        const { runtimeEvents, done, runtimeEventsFiber } = yield* collectUntil(adapter, (events) =>
+          events.some(
+            (event) => event.type === "task.started" && event.payload.taskId === "child-1",
+          ),
+        );
+
+        yield* adapter.startSession({
+          threadId,
+          provider: ProviderDriverKind.make("acpRegistry"),
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+        });
+        yield* Deferred.await(done);
+
+        const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+        assert.equal(initializeClientSubagentEventsVersion(requests), 1);
+
+        const started = runtimeEvents.find(
+          (event): event is Extract<ProviderRuntimeEvent, { type: "task.started" }> =>
+            event.type === "task.started" && event.payload.taskId === "child-1",
+        );
+        assert.isDefined(started);
+        assert.equal(started?.turnId, undefined);
+        assert.equal(started?.raw?.source, "acp.contextivity.extension");
+        assert.equal(started?.payload.taskType, "subagent");
+        assert.equal(started?.payload.timelineBypass, true);
+        assert.equal(started?.payload.title, "Scout");
+        assert.equal(started?.payload.role, "scout");
+        assert.equal(started?.payload.model, "gpt-5.4-mini");
+        assert.isUndefined(started?.payload.agentId);
+        assert.equal(
+          classifyTaskAgentKind({
+            taskType: started?.payload.taskType,
+            agentId: started?.payload.agentId,
+          }),
+          "agent",
+        );
+
+        yield* Fiber.interrupt(runtimeEventsFiber);
+        yield* adapter.stopSession(threadId);
+      }),
+  );
+
+  it.effect("maps nested snapshot children onto parentAgentId without a turn", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("acp-registry-subagent-nested");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAcpRegistryWrapper({
+          T3_ACP_ADVERTISE_SUBAGENT_EVENTS: "1",
+          T3_ACP_SUBAGENT_SCENARIO: "nested",
+        }),
+      );
+      const adapter = yield* makeTestAdapter({ binaryPath: wrapperPath });
+      const { runtimeEvents, done, runtimeEventsFiber } = yield* collectUntil(
+        adapter,
+        (events) => events.filter((event) => event.type === "task.started").length >= 2,
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("acpRegistry"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* Deferred.await(done);
+
+      const started = runtimeEvents.filter(
+        (event): event is Extract<ProviderRuntimeEvent, { type: "task.started" }> =>
+          event.type === "task.started",
+      );
+      assert.deepStrictEqual(
+        started.map((event) => event.payload.taskId),
+        ["child-1", "child-2"],
+      );
+      assert.equal(started[0]?.payload.title, "Coordinator");
+      assert.equal(started[1]?.payload.parentAgentId, "child-1");
+      assert.equal(started[1]?.payload.title, "Worker");
+      assert.isUndefined(started[1]?.payload.agentId);
+
+      yield* Fiber.interrupt(runtimeEventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("maps lifecycle deltas including cancel onto canonical task events", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("acp-registry-subagent-lifecycle");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAcpRegistryWrapper({
+          T3_ACP_ADVERTISE_SUBAGENT_EVENTS: "1",
+          T3_ACP_SUBAGENT_SCENARIO: "lifecycle",
+        }),
+      );
+      const adapter = yield* makeTestAdapter({ binaryPath: wrapperPath });
+      const { runtimeEvents, done, runtimeEventsFiber } = yield* collectUntil(
+        adapter,
+        (events) =>
+          events.some(
+            (event) => event.type === "task.completed" && event.payload.status === "completed",
+          ) && events.some((event) => event.type === "turn.completed"),
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("acpRegistry"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "run lifecycle",
+        attachments: [],
+      });
+      yield* Deferred.await(done);
+
+      const tasks = runtimeEvents.filter(isTaskRuntimeEvent);
+      assert.isTrue(tasks.some((event) => event.type === "task.started"));
+      assert.isTrue(
+        tasks.some((event) => event.type === "task.updated" && event.payload.status === "waiting"),
+      );
+      assert.isTrue(
+        tasks.some((event) => event.type === "task.updated" && event.payload.status === "idle"),
+      );
+      assert.isTrue(
+        tasks.some(
+          (event) => event.type === "task.completed" && event.payload.status === "completed",
+        ),
+      );
+      assert.includeMembers(
+        runtimeEvents.map((event) => event.type),
+        ["content.delta", "turn.completed"],
+      );
+
+      yield* Fiber.interrupt(runtimeEventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("maps cancellation to cancelled then stopped", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("acp-registry-subagent-cancel");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAcpRegistryWrapper({
+          T3_ACP_ADVERTISE_SUBAGENT_EVENTS: "1",
+          T3_ACP_SUBAGENT_SCENARIO: "cancel",
+        }),
+      );
+      const adapter = yield* makeTestAdapter({ binaryPath: wrapperPath });
+      const { runtimeEvents, done, runtimeEventsFiber } = yield* collectUntil(
+        adapter,
+        (events) =>
+          events.some(
+            (event) => event.type === "task.completed" && event.payload.status === "stopped",
+          ) && events.some((event) => event.type === "turn.completed"),
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("acpRegistry"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "cancel child",
+        attachments: [],
+      });
+      yield* Deferred.await(done);
+
+      const tasks = runtimeEvents.filter(isTaskRuntimeEvent);
+      const types = tasks.map((event) =>
+        event.type === "task.updated" || event.type === "task.completed"
+          ? `${event.type}:${event.payload.status}`
+          : event.type,
+      );
+      assert.includeMembers(types, [
+        "task.started",
+        "task.updated:cancelled",
+        "task.completed:stopped",
+      ]);
+      assert.isFalse(types.includes("task.completed:cancelled"));
+
+      yield* Fiber.interrupt(runtimeEventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("ignores duplicate and out-of-order sequences and emits one terminal", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("acp-registry-subagent-sequence");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAcpRegistryWrapper({
+          T3_ACP_ADVERTISE_SUBAGENT_EVENTS: "1",
+          T3_ACP_SUBAGENT_SCENARIO: "sequence",
+        }),
+      );
+      const adapter = yield* makeTestAdapter({ binaryPath: wrapperPath });
+      const { runtimeEvents, done, runtimeEventsFiber } = yield* collectUntil(
+        adapter,
+        (events) =>
+          events.some(
+            (event) => event.type === "task.completed" && event.payload.status === "completed",
+          ) && events.some((event) => event.type === "turn.completed"),
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("acpRegistry"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "sequence",
+        attachments: [],
+      });
+      yield* Deferred.await(done);
+
+      const completed = runtimeEvents.filter((event) => event.type === "task.completed");
+      assert.lengthOf(completed, 1);
+      assert.equal(completed[0]?.payload.status, "completed");
+      assert.equal(completed[0]?.payload.summary, "seq-4");
+
+      yield* Fiber.interrupt(runtimeEventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("maps optional usage onto task.progress", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("acp-registry-subagent-usage");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAcpRegistryWrapper({
+          T3_ACP_ADVERTISE_SUBAGENT_EVENTS: "1",
+          T3_ACP_SUBAGENT_SCENARIO: "usage",
+        }),
+      );
+      const adapter = yield* makeTestAdapter({ binaryPath: wrapperPath });
+      const { runtimeEvents, done, runtimeEventsFiber } = yield* collectUntil(
+        adapter,
+        (events) =>
+          events.some(
+            (event) =>
+              event.type === "task.progress" && event.payload.typedUsage?.totalTokens === 42,
+          ) && events.some((event) => event.type === "turn.completed"),
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("acpRegistry"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "usage",
+        attachments: [],
+      });
+      yield* Deferred.await(done);
+
+      const progress = runtimeEvents.find(
+        (event): event is Extract<ProviderRuntimeEvent, { type: "task.progress" }> =>
+          event.type === "task.progress" && event.payload.typedUsage?.totalTokens === 42,
+      );
+      assert.deepStrictEqual(progress?.payload.typedUsage, {
+        totalTokens: 42,
+        inputTokens: 10,
+        outputTokens: 32,
+      });
+
+      yield* Fiber.interrupt(runtimeEventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("ignores malformed subagent events and still completes the turn", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("acp-registry-subagent-malformed");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAcpRegistryWrapper({
+          T3_ACP_ADVERTISE_SUBAGENT_EVENTS: "1",
+          T3_ACP_SUBAGENT_SCENARIO: "malformed",
+        }),
+      );
+      const adapter = yield* makeTestAdapter({ binaryPath: wrapperPath });
+      const { runtimeEvents, done, runtimeEventsFiber } = yield* collectUntil(adapter, (events) =>
+        events.some((event) => event.type === "turn.completed"),
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("acpRegistry"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "still works",
+        attachments: [],
+      });
+      yield* Deferred.await(done);
+
+      assert.lengthOf(runtimeEvents.filter(isTaskRuntimeEvent), 0);
+      const completed = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(
+        completed && completed.type === "turn.completed" ? completed.payload.state : undefined,
+        "completed",
+      );
+
+      yield* Fiber.interrupt(runtimeEventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("does not ingest unnegotiated subagent events", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("acp-registry-subagent-unnegotiated");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "acp-registry-subagent-unnegotiated-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAcpRegistryWrapper({
+          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+          T3_ACP_EMIT_SUBAGENT_EVENTS_UNNEGOTIATED: "1",
+          T3_ACP_SUBAGENT_SCENARIO: "snapshot",
+        }),
+      );
+      const adapter = yield* makeTestAdapter({ binaryPath: wrapperPath });
+      const { runtimeEvents, done, runtimeEventsFiber } = yield* collectUntil(adapter, (events) =>
+        events.some((event) => event.type === "turn.completed"),
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("acpRegistry"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "hello",
+        attachments: [],
+      });
+      yield* Deferred.await(done);
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      assert.equal(initializeClientSubagentEventsVersion(requests), 1);
+      assert.lengthOf(runtimeEvents.filter(isTaskRuntimeEvent), 0);
+      assert.isTrue(runtimeEvents.some((event) => event.type === "content.delta"));
+
+      yield* Fiber.interrupt(runtimeEventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("does not ingest a mismatched subagent-event version", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("acp-registry-subagent-mismatch");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAcpRegistryWrapper({
+          T3_ACP_ADVERTISE_SUBAGENT_EVENTS: "1",
+          T3_ACP_SUBAGENT_EVENTS_VERSION: "2",
+          T3_ACP_SUBAGENT_SCENARIO: "snapshot",
+        }),
+      );
+      const adapter = yield* makeTestAdapter({ binaryPath: wrapperPath });
+      const { runtimeEvents, done, runtimeEventsFiber } = yield* collectUntil(adapter, (events) =>
+        events.some((event) => event.type === "turn.completed"),
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("acpRegistry"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "hello",
+        attachments: [],
+      });
+      yield* Deferred.await(done);
+
+      assert.lengthOf(runtimeEvents.filter(isTaskRuntimeEvent), 0);
+      assert.isTrue(runtimeEvents.some((event) => event.type === "content.delta"));
+
+      yield* Fiber.interrupt(runtimeEventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
   );
 });

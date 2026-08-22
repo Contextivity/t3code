@@ -66,9 +66,9 @@ payload so the activity stays visible as an ACP tool.
 
 ## Limitations
 
-- The native **Agents** panel does not reconstruct ACP subagent lineage. A Contextivity subagent
-  still runs and appears as ACP tool activity in the thread; it does not become a nested T3 agent
-  row.
+- The native **Agents** panel shows ACP sub-agents when the agent advertises the shared
+  sub-agent events capability (version 1). Agents that do not advertise it still appear only as
+  ACP tool activity in the thread.
 - ACP `available_commands` updates have no T3 command palette or slash-command surface. Commands
   the agent advertises stay on the agent side.
 - ACP Registry does not implement Grok's private x.ai extensions. Use the Grok provider for Grok.

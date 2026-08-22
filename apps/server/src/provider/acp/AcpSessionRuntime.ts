@@ -12,6 +12,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
@@ -20,6 +21,13 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+
+import {
+  ACP_SUBAGENT_EVENT_METHOD,
+  parseAcpSubagentEvent,
+  summarizeAcpSubagentEvent,
+  type AcpSubagentEventPayload,
+} from "./ContextivityAcpExtension.ts";
 
 import {
   collectSessionConfigOptionValues,
@@ -45,7 +53,16 @@ export interface AcpSessionEventStreamBarrier {
   readonly acknowledge: Deferred.Deferred<void>;
 }
 
-export type AcpSessionRuntimeEvent = AcpParsedSessionEvent | AcpSessionEventStreamBarrier;
+export type AcpContextivitySubagentRuntimeEvent = {
+  readonly _tag: "ContextivitySubagentEvent";
+  readonly payload: AcpSubagentEventPayload;
+  readonly rawPayload: unknown;
+};
+
+export type AcpSessionRuntimeEvent =
+  | AcpParsedSessionEvent
+  | AcpSessionEventStreamBarrier
+  | AcpContextivitySubagentRuntimeEvent;
 
 const defaultSessionLoadTimeout = Duration.seconds(90);
 const defaultSessionLoadReplayIdleGap = Duration.seconds(2);
@@ -446,6 +463,23 @@ export const make = (
           params: notification,
         });
       }),
+    );
+    yield* acp.handleExtNotification(ACP_SUBAGENT_EVENT_METHOD, Schema.Unknown, (params) =>
+      Effect.gen(function* () {
+        const parsed = parseAcpSubagentEvent(params);
+        if (!parsed) {
+          yield* Effect.logDebug("Ignored malformed ACP subagent event.", {
+            method: ACP_SUBAGENT_EVENT_METHOD,
+            payload: summarizeAcpSubagentEvent(params),
+          });
+          return;
+        }
+        yield* Queue.offer(eventQueue, {
+          _tag: "ContextivitySubagentEvent",
+          payload: parsed,
+          rawPayload: params,
+        });
+      }).pipe(Effect.catchCause(() => Effect.void)),
     );
     const initializeClientCapabilities = {
       fs: {

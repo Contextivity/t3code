@@ -40,6 +40,10 @@ const rejectMcpServers = process.env.T3_ACP_REJECT_MCP === "1";
 const advertiseHttpMcp = process.env.T3_ACP_ADVERTISE_HTTP_MCP === "1";
 const emitThought = process.env.T3_ACP_EMIT_THOUGHT === "1";
 const emitToolMeta = process.env.T3_ACP_EMIT_TOOL_META === "1";
+const advertiseSubagentEvents = process.env.T3_ACP_ADVERTISE_SUBAGENT_EVENTS === "1";
+const advertiseSubagentEventsVersion = Number(process.env.T3_ACP_SUBAGENT_EVENTS_VERSION ?? "1");
+const subagentScenario = process.env.T3_ACP_SUBAGENT_SCENARIO ?? "";
+const emitUnnegotiatedSubagentEvents = process.env.T3_ACP_EMIT_SUBAGENT_EVENTS_UNNEGOTIATED === "1";
 const authMethodsEnv = process.env.T3_ACP_AUTH_METHODS;
 const advertisedAuthMethods =
   authMethodsEnv === undefined
@@ -69,6 +73,254 @@ let currentFast = false;
 let promptCount = 0;
 let overlappingFirstPromptId: string | undefined;
 const cancelledSessions = new Set<string>();
+let clientAdvertisedSubagentEvents = false;
+let subagentSequence = 0;
+const MOCK_NOW_MS = 1_700_000_000_000;
+
+function clientWantsSubagentEvents(): boolean {
+  return clientAdvertisedSubagentEvents || emitUnnegotiatedSubagentEvents;
+}
+
+function nextSubagentSequence(): number {
+  subagentSequence += 1;
+  return subagentSequence;
+}
+
+function mockSubagentRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    agentId: "child-1",
+    displayName: "Scout",
+    typeName: "scout",
+    role: "scout",
+    state: "running",
+    updatedAt: MOCK_NOW_MS,
+    ...overrides,
+  };
+}
+
+function emitSubagentEvent(payload: Record<string, unknown>): void {
+  if (!clientWantsSubagentEvents()) {
+    return;
+  }
+  writeJsonRpcNotification("_contextivity/subagent_event", payload);
+}
+
+function emitSubagentScenarioOnSession(requestedSessionId: string): void {
+  if (!advertiseSubagentEvents && !emitUnnegotiatedSubagentEvents) {
+    return;
+  }
+  if (subagentScenario === "snapshot" || subagentScenario === "nested" || subagentScenario === "") {
+    const records =
+      subagentScenario === "nested"
+        ? [
+            mockSubagentRecord({
+              agentId: "child-1",
+              displayName: "Coordinator",
+              typeName: "coordinator",
+              role: "coordinator",
+              spawnDepth: 0,
+              lineage: ["child-1"],
+            }),
+            mockSubagentRecord({
+              agentId: "child-2",
+              parentAgentId: "child-1",
+              displayName: "Worker",
+              typeName: "worker",
+              role: "worker",
+              spawnDepth: 1,
+              lineage: ["child-1", "child-2"],
+              description: "Inspect nested files",
+            }),
+          ]
+        : [
+            mockSubagentRecord({
+              description: "Inspect the repo",
+              taskSubject: "Inspect",
+              modelId: "gpt-5.4-mini",
+              latestActivity: "reading package.json",
+              lastToolName: "read",
+            }),
+          ];
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: nextSubagentSequence(),
+      kind: "snapshot",
+      records,
+    });
+  }
+}
+
+function emitSubagentScenarioOnPrompt(requestedSessionId: string): void {
+  if (!advertiseSubagentEvents && !emitUnnegotiatedSubagentEvents) {
+    return;
+  }
+  if (subagentScenario === "malformed") {
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: "nope",
+      kind: "delta",
+    });
+    return;
+  }
+  if (subagentScenario === "lifecycle") {
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: nextSubagentSequence(),
+      kind: "delta",
+      change: "started",
+      records: [
+        mockSubagentRecord({
+          state: "spawned",
+          description: "Inspect the repo",
+          modelId: "gpt-5.4-mini",
+        }),
+      ],
+    });
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: nextSubagentSequence(),
+      kind: "delta",
+      change: "updated",
+      records: [
+        mockSubagentRecord({
+          state: "waiting_approval",
+          latestActivity: "waiting on permission",
+        }),
+      ],
+    });
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: nextSubagentSequence(),
+      kind: "delta",
+      change: "updated",
+      records: [
+        mockSubagentRecord({
+          state: "idle",
+          latestActivity: "paused",
+        }),
+      ],
+    });
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: nextSubagentSequence(),
+      kind: "delta",
+      change: "terminal",
+      records: [
+        mockSubagentRecord({
+          state: "completed",
+          terminal: { kind: "completed", endedAt: MOCK_NOW_MS, summary: "done" },
+        }),
+      ],
+    });
+    return;
+  }
+  if (subagentScenario === "sequence") {
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: 1,
+      kind: "delta",
+      change: "started",
+      records: [mockSubagentRecord({ state: "spawned" })],
+    });
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: 1,
+      kind: "delta",
+      change: "terminal",
+      records: [
+        mockSubagentRecord({ state: "failed", terminal: { kind: "failed", endedAt: MOCK_NOW_MS } }),
+      ],
+    });
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: 3,
+      kind: "delta",
+      change: "updated",
+      records: [mockSubagentRecord({ state: "running", latestActivity: "seq-3" })],
+    });
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: 2,
+      kind: "delta",
+      change: "terminal",
+      records: [
+        mockSubagentRecord({ state: "failed", terminal: { kind: "failed", endedAt: MOCK_NOW_MS } }),
+      ],
+    });
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: 4,
+      kind: "delta",
+      change: "terminal",
+      records: [
+        mockSubagentRecord({
+          state: "completed",
+          terminal: { kind: "completed", endedAt: MOCK_NOW_MS, summary: "seq-4" },
+        }),
+      ],
+    });
+    return;
+  }
+  if (subagentScenario === "usage") {
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: nextSubagentSequence(),
+      kind: "delta",
+      change: "started",
+      records: [mockSubagentRecord({ state: "running" })],
+    });
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: nextSubagentSequence(),
+      kind: "delta",
+      change: "updated",
+      records: [
+        mockSubagentRecord({
+          state: "running",
+          latestActivity: "counting tokens",
+          usage: { totalTokens: 42, inputTokens: 10, outputTokens: 32 },
+        }),
+      ],
+    });
+    return;
+  }
+  if (subagentScenario === "cancel") {
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: nextSubagentSequence(),
+      kind: "delta",
+      change: "started",
+      records: [mockSubagentRecord({ state: "running" })],
+    });
+    emitSubagentEvent({
+      version: 1,
+      sessionId: requestedSessionId,
+      sequence: nextSubagentSequence(),
+      kind: "delta",
+      change: "terminal",
+      records: [
+        mockSubagentRecord({
+          state: "cancelled",
+          terminal: { kind: "cancelled", endedAt: MOCK_NOW_MS },
+        }),
+      ],
+    });
+  }
+}
 
 function promptIdFromRequestMeta(
   request: Pick<AcpSchema.PromptRequest, "_meta">,
@@ -313,11 +565,27 @@ const program = Effect.gen(function* () {
     Effect.sync(() => {
       parameterizedModelPicker =
         request.clientCapabilities?._meta?.parameterizedModelPicker === true;
+      const ns = request.clientCapabilities?._meta?.contextivity;
+      clientAdvertisedSubagentEvents =
+        typeof ns === "object" &&
+        ns !== null &&
+        !Array.isArray(ns) &&
+        typeof (ns as { subagentEvents?: { version?: unknown } }).subagentEvents === "object" &&
+        (ns as { subagentEvents?: { version?: unknown } }).subagentEvents?.version === 1;
       return {
         protocolVersion: 1,
         agentCapabilities: {
           loadSession: true,
           ...(advertiseHttpMcp ? { mcpCapabilities: { http: true } } : {}),
+          ...(advertiseSubagentEvents
+            ? {
+                _meta: {
+                  contextivity: {
+                    subagentEvents: { version: advertiseSubagentEventsVersion },
+                  },
+                },
+              }
+            : {}),
         },
         ...(advertisedAuthMethods ? { authMethods: advertisedAuthMethods } : {}),
       };
@@ -337,6 +605,7 @@ const program = Effect.gen(function* () {
           },
         );
       }
+      emitSubagentScenarioOnSession(sessionId);
       return {
         sessionId,
         modes: modeState(),
@@ -492,6 +761,8 @@ const program = Effect.gen(function* () {
       if (failPrompt) {
         return yield* AcpError.AcpRequestError.internalError("Mock prompt failure");
       }
+
+      emitSubagentScenarioOnPrompt(requestedSessionId);
 
       if (emitStaleXAiPromptCompleteBeforeSecondHang && promptCount === 1) {
         return {

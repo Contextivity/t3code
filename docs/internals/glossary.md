@@ -96,6 +96,10 @@ The live backend agent implementation and its event stream. The main service is 
 
 The backend agent runtime that actually performs work. Six drivers ship built in: Codex, Claude, Cursor, Grok, OpenCode, and ACP Registry. ACP Registry is a generic ACP executable adapter (for example Contextivity) and is not synthesized from the legacy providers blob. See [ProviderService.ts][14], [ProviderAdapter.ts][15], and [CodexAdapter.ts][17] as a representative adapter.
 
+#### ACP sub-agent events
+
+A namespaced ACP extension (`_contextivity/subagent_event`) that any ACP agent may advertise via `_meta.contextivity.subagentEvents.version = 1`. T3's ACP Registry client advertises the same capability and, when the agent matches, maps bounded child records onto canonical `task.*` events for the Agents panel. See [acp-subagent-events.md][25] and [AcpRegistryAdapter.ts][26].
+
 #### Session
 
 The live provider-backed runtime attached to a thread. Session shape is in [the orchestration contracts][1], and lifecycle is managed in [ProviderService.ts][14].
@@ -179,3 +183,5 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
+[25]: ./acp-subagent-events.md
+[26]: ../../apps/server/src/provider/Layers/AcpRegistryAdapter.ts

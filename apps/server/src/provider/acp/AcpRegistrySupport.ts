@@ -9,6 +9,7 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
+import { acpRegistryClientCapabilities } from "./ContextivityAcpExtension.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 
 const ACP_REGISTRY_DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
@@ -64,6 +65,7 @@ export const makeAcpRegistryRuntime = (
         spawn: buildAcpRegistrySpawnInput(input.settings, input.cwd, input.environment),
         authMethodId: input.settings.authMethodId,
         mcpPolicy: resolveAcpRegistryMcpPolicy(input.settings),
+        clientCapabilities: acpRegistryClientCapabilities(),
       }).pipe(
         Layer.provide(
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),

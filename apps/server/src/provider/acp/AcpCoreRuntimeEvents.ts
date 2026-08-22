@@ -12,6 +12,8 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 
+import type { ContextivityMappedTaskEvent } from "./ContextivityAcpSubagentMapper.ts";
+
 import type { AcpPermissionRequest, AcpPlanUpdate, AcpToolCallState } from "./AcpRuntimeModel.ts";
 
 type AcpAdapterRawSource = Extract<
@@ -240,6 +242,39 @@ export function makeAcpContentDeltaEvent(input: {
       payload: input.rawPayload,
     },
   };
+}
+
+export function makeAcpTaskEvent(input: {
+  readonly stamp: AcpEventStamp;
+  readonly provider: ProviderDriverKind;
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId | undefined;
+  readonly event: ContextivityMappedTaskEvent;
+  readonly source: AcpAdapterRawSource;
+  readonly method: string;
+  readonly rawPayload: unknown;
+}): ProviderRuntimeEvent {
+  const base = {
+    ...input.stamp,
+    provider: input.provider,
+    threadId: input.threadId,
+    ...(input.turnId ? { turnId: input.turnId } : {}),
+    raw: {
+      source: input.source,
+      method: input.method,
+      payload: input.rawPayload,
+    },
+  };
+  switch (input.event.type) {
+    case "task.started":
+      return { ...base, type: "task.started", payload: input.event.payload };
+    case "task.progress":
+      return { ...base, type: "task.progress", payload: input.event.payload };
+    case "task.updated":
+      return { ...base, type: "task.updated", payload: input.event.payload };
+    case "task.completed":
+      return { ...base, type: "task.completed", payload: input.event.payload };
+  }
 }
 
 function streamKindFromRawPayload(rawPayload: unknown): "assistant_text" | "reasoning_text" {

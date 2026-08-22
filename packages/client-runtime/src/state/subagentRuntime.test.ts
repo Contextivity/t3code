@@ -612,6 +612,38 @@ describe("model and effort attribution", () => {
 });
 
 describe("background task exclusion", () => {
+  it("ACP Registry child records with taskType subagent join the Agents panel", () => {
+    const agents = fold([
+      activity("task.started", {
+        taskId: "child-1",
+        taskType: "subagent",
+        title: "Coordinator",
+        role: "coordinator",
+        timelineBypass: true,
+      }),
+      activity("task.started", {
+        taskId: "child-2",
+        taskType: "subagent",
+        title: "Worker",
+        role: "worker",
+        parentAgentId: "child-1",
+        timelineBypass: true,
+      }),
+      activity("task.updated", {
+        taskId: "child-2",
+        taskType: "subagent",
+        status: "waiting",
+        timelineBypass: true,
+      }),
+    ]);
+    expect(agents.map((agent) => agent.id)).toEqual(["child-1", "child-2"]);
+    expect(agents.find((agent) => agent.id === "child-2")?.parentAgentId).toBe("child-1");
+    expect(agents.find((agent) => agent.id === "child-2")?.status).toBe("waiting");
+    const panel = deriveAgentPanelModel({ agents });
+    expect(panel.hasAgents).toBe(true);
+    expect(panel.directAgents.map((agent) => agent.id)).toEqual(["child-1", "child-2"]);
+  });
+
   it("shells and monitors never join the roster (from any lifecycle row)", () => {
     const agents = fold([
       activity("task.started", { taskId: "shell-1", taskType: "shell", title: "Run 12s stall" }),

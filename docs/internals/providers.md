@@ -53,8 +53,12 @@ reason. MCP is attached only when the switch is on and the initialized agent adv
 (`mcpPolicy: "auto"`; `"never"` when the switch is off). Grok and Cursor keep `mcpPolicy: "always"`.
 
 ACP tool `_meta` is preserved on canonical tool data so namespaced subagent metadata stays
-observable as tool activity. T3 does not map that metadata onto the native Agents panel, and ACP
-`available_commands_update` has no command-palette surface.
+observable as tool activity. When the agent also advertises
+`_meta.contextivity.subagentEvents.version = 1`, ACP Registry maps
+`_contextivity/subagent_event` onto canonical `task.*` events for the Agents panel
+(see [acp-subagent-events.md](./acp-subagent-events.md)). Agents without that capability
+keep tool-activity-only behavior. ACP `available_commands_update` has no command-palette
+surface.
 
 ## How provider work is requested
 
