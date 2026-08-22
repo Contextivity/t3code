@@ -11,6 +11,32 @@ export interface SpawnRequest {
   readonly input?: string;
 }
 
+export const HOST_RESTART_TIMEOUT_MS = 60_000;
+export const HOST_HEALTH_TIMEOUT_MS = 30_000;
+
+export async function runBoundedHostCommand(
+  command: string,
+  timeoutMs: number,
+): Promise<CommandResult> {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) {
+    return { code: 1, stdout: "", stderr: "Host command is empty." };
+  }
+  try {
+    return await spawnCommand({
+      command: "sh",
+      args: ["-c", trimmed],
+      timeoutMs,
+    });
+  } catch (error) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export function spawnCommand(request: SpawnRequest): Promise<CommandResult> {
   const { command, args = [], cwd, env, timeoutMs, input } = request;
   return new Promise((resolve, reject) => {

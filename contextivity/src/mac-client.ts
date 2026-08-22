@@ -28,7 +28,7 @@ export function resolveMacClientVersion(input: {
     if (parsed) return parsed;
   }
   throw new Error(
-    "Could not determine the official Mac desktop version. Pass --mac-client-version or set CONTEXTIVITY_T3_MAC_CLIENT_VERSION. Promotion fails closed.",
+    "Could not determine the official Mac desktop version. Pass --mac-client-version or set CONTEXTIVITY_T3_MAC_CLIENT_VERSION. Promotion and fleet activation fail closed.",
   );
 }
 

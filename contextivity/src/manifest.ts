@@ -98,8 +98,10 @@ export function buildCandidateManifest(input: {
     throw new Error(`Invalid createdAt '${input.createdAt}'.`);
   }
   const artifacts = normalizeArtifacts(input.artifacts);
-  if (artifacts.length === 0) {
-    throw new Error("A candidate manifest must include at least one artifact.");
+  if (artifacts.length !== PLATFORMS.length) {
+    throw new Error(
+      `A candidate manifest must include exactly the four server platforms: ${PLATFORMS.join(", ")}.`,
+    );
   }
   return {
     schemaVersion: SCHEMA_VERSION,

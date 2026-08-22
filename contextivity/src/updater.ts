@@ -143,6 +143,8 @@ export async function stageCandidate(input: {
 }): Promise<StagedVersion> {
   const platform = detectHostPlatform(input.processLike).platform;
   const artifact = selectArtifact(input.manifest, platform);
+  // Manifest artifact hashes are authoritative. SHA256SUMS is published alongside
+  // for humans and GitHub; staging never trusts that sidecar over the manifest.
   await verifyStagedArtifact({
     archivePath: input.archivePath,
     expectedSha256: artifact.sha256,

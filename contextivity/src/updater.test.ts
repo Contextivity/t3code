@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { createHash } from "node:crypto";
-import { buildCandidateManifest } from "./manifest.ts";
+import { PLATFORMS } from "./config.ts";
+import { buildCandidateManifest, type ManifestArtifact } from "./manifest.ts";
+import { HOST_HEALTH_TIMEOUT_MS, runBoundedHostCommand } from "./spawn.ts";
 import {
   activateAndVerify,
   activateStaged,
@@ -23,6 +25,15 @@ function sha256(contents: string): string {
   return createHash("sha256").update(contents).digest("hex");
 }
 
+function artifactsFor(sha: string, size: number): ManifestArtifact[] {
+  return PLATFORMS.map((platform, index) => ({
+    platform,
+    name: `t3-server-${platform}.tar.gz`,
+    size: platform === "linux-x64" ? size : index + 1,
+    sha256: platform === "linux-x64" ? sha : String.fromCharCode(98 + index).repeat(64),
+  }));
+}
+
 function manifestFor(sha: string, size: number) {
   return buildCandidateManifest({
     upstreamVersion: "0.0.34-nightly.20260822.2",
@@ -31,14 +42,7 @@ function manifestFor(sha: string, size: number) {
     buildRevision: "run-1",
     nodeEngine: ">=24",
     createdAt: "2026-08-22T00:00:00.000Z",
-    artifacts: [
-      {
-        platform: "linux-x64",
-        name: "t3-server-linux-x64.tar.gz",
-        size,
-        sha256: sha,
-      },
-    ],
+    artifacts: artifactsFor(sha, size),
   });
 }
 
@@ -207,14 +211,7 @@ describe("updater stage/activate/rollback", () => {
       buildRevision: "run-3",
       nodeEngine: ">=24",
       createdAt: "2026-08-23T00:00:00.000Z",
-      artifacts: [
-        {
-          platform: "linux-x64",
-          name: "t3-server-linux-x64.tar.gz",
-          size: nextBody.length,
-          sha256: sha256(nextBody),
-        },
-      ],
+      artifacts: artifactsFor(sha256(nextBody), nextBody.length),
     });
     await stageCandidate({
       layout,
@@ -232,6 +229,68 @@ describe("updater stage/activate/rollback", () => {
           layout,
           installId: "0.0.35-nightly.20260823.1-ctx.eee2222",
           commands,
+        }),
+      /Health check/,
+    );
+    assert.equal(updaterStatus(layout).current, staged.installId);
+  });
+
+  it("rolls back when a bounded host health command fails", async () => {
+    const root = tempRoot();
+    const layout = layoutAt(root);
+    const archivePath = join(root, "payload.tar.gz");
+    const body = "archive-bytes";
+    writeFileSync(archivePath, body);
+    const manifest = manifestFor(sha256(body), body.length);
+    const commands: UpdaterCommands = {
+      extractArchive: async (_archive, destination) => {
+        mkdirSync(join(destination, "dist"), { recursive: true });
+        writeFileSync(join(destination, "dist/bin.mjs"), "export {};\n");
+      },
+      preflight: async () => ({ code: 0, stdout: "", stderr: "" }),
+    };
+    const staged = await stageCandidate({
+      layout,
+      manifest,
+      archivePath,
+      commands,
+      github: { owner: "Contextivity", repo: "t3code" },
+      githubAuthenticated: false,
+      oidcAvailable: false,
+      processLike: { platform: "linux", arch: "x64" },
+    });
+    activateStaged({ layout, installId: staged.installId });
+
+    const nextBody = "next-health";
+    writeFileSync(archivePath, nextBody);
+    const nextManifest = buildCandidateManifest({
+      upstreamVersion: "0.0.35-nightly.20260823.1",
+      upstreamCommit: "e".repeat(40),
+      contextivityRevision: "eee2222",
+      buildRevision: "run-3",
+      nodeEngine: ">=24",
+      createdAt: "2026-08-23T00:00:00.000Z",
+      artifacts: artifactsFor(sha256(nextBody), nextBody.length),
+    });
+    await stageCandidate({
+      layout,
+      manifest: nextManifest,
+      archivePath,
+      commands,
+      github: { owner: "Contextivity", repo: "t3code" },
+      githubAuthenticated: false,
+      oidcAvailable: false,
+      processLike: { platform: "linux", arch: "x64" },
+    });
+    await assert.rejects(
+      () =>
+        activateAndVerify({
+          layout,
+          installId: "0.0.35-nightly.20260823.1-ctx.eee2222",
+          commands: {
+            ...commands,
+            health: () => runBoundedHostCommand("exit 1", HOST_HEALTH_TIMEOUT_MS),
+          },
         }),
       /Health check/,
     );

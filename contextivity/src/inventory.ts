@@ -73,22 +73,25 @@ export function decodeInventory(text: string): Inventory {
         );
       }
     }
+    const healthCommand =
+      typeof host["healthCommand"] === "string" ? host["healthCommand"].trim() : "";
+    const restartCommand =
+      typeof host["restartCommand"] === "string" ? host["restartCommand"].trim() : "";
     const decoded: InventoryHost = {
       name,
       via,
       ...(sshAlias ? { sshAlias } : {}),
       ...(host["clientGate"] === true ? { clientGate: true } : {}),
-      ...(typeof host["healthCommand"] === "string"
-        ? { healthCommand: host["healthCommand"] }
-        : {}),
-      ...(typeof host["restartCommand"] === "string"
-        ? { restartCommand: host["restartCommand"] }
-        : {}),
+      ...(healthCommand ? { healthCommand } : {}),
+      ...(restartCommand ? { restartCommand } : {}),
     };
     return decoded;
   });
   if (hosts.filter((host) => host.via === "local").length !== 1) {
     throw new Error("inventory must contain exactly one host with via=local.");
+  }
+  if (hosts.filter((host) => host.clientGate === true).length !== 1) {
+    throw new Error("inventory must contain exactly one host with clientGate=true.");
   }
   return {
     schemaVersion: SCHEMA_VERSION,

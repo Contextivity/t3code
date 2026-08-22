@@ -1,18 +1,51 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
+import { usage } from "./args.ts";
+import { main } from "./cli.ts";
+import { PLATFORMS } from "./config.ts";
 import { executeTwoPhase, gateFleetWithMacClient, planFleetUpdate } from "./fleet.ts";
 import { decodeInventory } from "./inventory.ts";
-import { buildCandidateManifest } from "./manifest.ts";
+import { buildCandidateManifest, encodeManifest, type ManifestArtifact } from "./manifest.ts";
 
 const inventory = decodeInventory(`{
   "schemaVersion": 1,
   "channel": "nightly",
   "hosts": [
-    { "name": "workstation", "via": "local", "clientGate": true },
-    { "name": "builder", "via": "ssh", "sshAlias": "builder" },
-    { "name": "lab", "via": "ssh", "sshAlias": "lab" }
+    {
+      "name": "workstation",
+      "via": "local",
+      "clientGate": true,
+      "restartCommand": "launchctl kickstart workstation",
+      "healthCommand": "curl -sf --max-time 5 http://127.0.0.1:3000/health"
+    },
+    {
+      "name": "builder",
+      "via": "ssh",
+      "sshAlias": "builder",
+      "restartCommand": "launchctl kickstart builder",
+      "healthCommand": "curl -sf --max-time 5 http://127.0.0.1:3001/health"
+    },
+    {
+      "name": "lab",
+      "via": "ssh",
+      "sshAlias": "lab",
+      "restartCommand": "systemctl --user restart contextivity-t3",
+      "healthCommand": "curl -sf --max-time 5 http://127.0.0.1:3002/health"
+    }
   ]
 }`);
+
+function fourArtifacts(): ManifestArtifact[] {
+  return PLATFORMS.map((platform, index) => ({
+    platform,
+    name: `t3-server-${platform}.tar.gz`,
+    size: index + 1,
+    sha256: String.fromCharCode(97 + index).repeat(64),
+  }));
+}
 
 const manifest = buildCandidateManifest({
   upstreamVersion: "0.0.34-nightly.20260822.2",
@@ -21,14 +54,7 @@ const manifest = buildCandidateManifest({
   buildRevision: "run-1",
   nodeEngine: ">=24",
   createdAt: "2026-08-22T00:00:00.000Z",
-  artifacts: [
-    {
-      platform: "linux-x64",
-      name: "t3-server-linux-x64.tar.gz",
-      size: 1,
-      sha256: "a".repeat(64),
-    },
-  ],
+  artifacts: fourArtifacts(),
 });
 
 describe("fleet two-phase update", () => {
@@ -46,6 +72,24 @@ describe("fleet two-phase update", () => {
       "--stage-only",
     ]);
     assert.deepEqual(plan.stage[1]?.argv.slice(0, 3), ["ssh", "builder", "--"]);
+  });
+
+  it("passes each host restart and health command through remote activate", () => {
+    const plan = planFleetUpdate({ inventory, manifest });
+    assert.deepEqual(plan.activate[0]?.argv, [
+      "t3-ctx",
+      "updater",
+      "activate",
+      "--version",
+      plan.installId,
+      "--restart-command",
+      "launchctl kickstart workstation",
+      "--health-command",
+      "curl -sf --max-time 5 http://127.0.0.1:3000/health",
+    ]);
+    assert.equal(plan.activate[1]?.argv.includes("launchctl kickstart builder"), true);
+    assert.equal(plan.activate[2]?.argv.includes("systemctl --user restart contextivity-t3"), true);
+    assert.equal(plan.activate[2]?.argv.includes("--health-command"), true);
   });
 
   it("activates none when any host fails staging", async () => {
@@ -94,6 +138,53 @@ describe("fleet two-phase update", () => {
     }
   });
 
+  it("rolls back switched hosts when restart or health on activate fails", async () => {
+    const plan = planFleetUpdate({ inventory, manifest });
+    const result = await executeTwoPhase({
+      plan,
+      executor: {
+        run: async (command) => {
+          if (
+            command.host === "builder" &&
+            command.argv.includes("activate") &&
+            command.argv.includes("--health-command")
+          ) {
+            return { host: command.host, ok: false, detail: "health command exited 1" };
+          }
+          return { host: command.host, ok: true, detail: "ok" };
+        },
+      },
+    });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.phase, "activate");
+      assert.equal(result.failedHost, "builder");
+      assert.deepEqual(result.rolledBack, ["workstation"]);
+    }
+  });
+
+  it("treats thrown activate/restart/health errors as host failure and rolls back", async () => {
+    const plan = planFleetUpdate({ inventory, manifest });
+    const result = await executeTwoPhase({
+      plan,
+      executor: {
+        run: async (command) => {
+          if (command.host === "lab" && command.argv.includes("--restart-command")) {
+            throw new Error("restart timed out");
+          }
+          return { host: command.host, ok: true, detail: "ok" };
+        },
+      },
+    });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.phase, "activate");
+      assert.equal(result.failedHost, "lab");
+      assert.equal(result.detail, "restart timed out");
+      assert.deepEqual(result.rolledBack, ["builder", "workstation"]);
+    }
+  });
+
   it("fails closed when the official Mac client version does not match", () => {
     const mismatch = gateFleetWithMacClient({
       manifest,
@@ -105,5 +196,87 @@ describe("fleet two-phase update", () => {
       macClientVersion: "0.0.34-nightly.20260822.2",
     });
     assert.equal(match.ok, true);
+  });
+
+  it("requires exactly one clientGate host in inventory", () => {
+    assert.throws(
+      () =>
+        decodeInventory(`{
+          "schemaVersion": 1,
+          "channel": "nightly",
+          "hosts": [
+            { "name": "workstation", "via": "local" },
+            { "name": "lab", "via": "ssh", "sshAlias": "lab" }
+          ]
+        }`),
+      /clientGate/,
+    );
+    assert.throws(
+      () =>
+        decodeInventory(`{
+          "schemaVersion": 1,
+          "channel": "nightly",
+          "hosts": [
+            { "name": "workstation", "via": "local", "clientGate": true },
+            { "name": "lab", "via": "ssh", "sshAlias": "lab", "clientGate": true }
+          ]
+        }`),
+      /clientGate/,
+    );
+  });
+});
+
+describe("direct t3-ctx fleet gate", () => {
+  it("documents mac-client-version as required for fleet activation", () => {
+    assert.match(usage(), /t3-ctx fleet update .* --mac-client-version <version>/);
+    assert.equal(usage().includes("[--mac-client-version"), false);
+  });
+
+  it("fails closed without a verified official Mac desktop version", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-fleet-cli-"));
+    const inventoryPath = join(dir, "inventory.json");
+    const manifestPath = join(dir, "manifest.json");
+    writeFileSync(
+      inventoryPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        channel: "nightly",
+        hosts: [
+          { name: "workstation", via: "local", clientGate: true },
+          { name: "lab", via: "ssh", sshAlias: "lab" },
+        ],
+      }),
+    );
+    writeFileSync(manifestPath, encodeManifest(manifest));
+    const previous = process.env.CONTEXTIVITY_T3_MAC_CLIENT_VERSION;
+    delete process.env.CONTEXTIVITY_T3_MAC_CLIENT_VERSION;
+    try {
+      const missing = await main([
+        "fleet",
+        "update",
+        "--inventory",
+        inventoryPath,
+        "--manifest",
+        manifestPath,
+      ]);
+      assert.equal(missing, 2);
+      const mismatch = await main([
+        "fleet",
+        "update",
+        "--inventory",
+        inventoryPath,
+        "--manifest",
+        manifestPath,
+        "--mac-client-version",
+        "0.0.1",
+      ]);
+      assert.equal(mismatch, 2);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CONTEXTIVITY_T3_MAC_CLIENT_VERSION;
+      } else {
+        process.env.CONTEXTIVITY_T3_MAC_CLIENT_VERSION = previous;
+      }
+    }
   });
 });

@@ -38,6 +38,17 @@ export function hostArgv(host: InventoryHost, args: readonly string[]): HostComm
   return { host: host.name, argv: ["ssh", alias, "--", "t3-ctx", ...args] };
 }
 
+export function updaterActivateArgs(host: InventoryHost, installId: string): readonly string[] {
+  const args = ["updater", "activate", "--version", installId];
+  if (host.restartCommand) {
+    args.push("--restart-command", host.restartCommand);
+  }
+  if (host.healthCommand) {
+    args.push("--health-command", host.healthCommand);
+  }
+  return args;
+}
+
 export function planFleetUpdate(input: {
   readonly inventory: Inventory;
   readonly manifest: CandidateManifest;
@@ -52,9 +63,7 @@ export function planFleetUpdate(input: {
   );
   const activate = input.stageOnly
     ? []
-    : input.inventory.hosts.map((host) =>
-        hostArgv(host, ["updater", "activate", "--version", installId]),
-      );
+    : input.inventory.hosts.map((host) => hostArgv(host, updaterActivateArgs(host, installId)));
   const rollback = input.inventory.hosts.map((host) => hostArgv(host, ["updater", "rollback"]));
   return { installId, stage, activate, rollback };
 }
@@ -76,7 +85,7 @@ export async function executeTwoPhase(input: {
 > {
   const staged: string[] = [];
   for (const command of input.plan.stage) {
-    const result = await input.executor.run(command);
+    const result = await runHost(input.executor, command);
     if (!result.ok) {
       return {
         ok: false,
@@ -93,13 +102,13 @@ export async function executeTwoPhase(input: {
 
   const activated: string[] = [];
   for (const command of input.plan.activate) {
-    const result = await input.executor.run(command);
+    const result = await runHost(input.executor, command);
     if (!result.ok) {
       const rolledBack: string[] = [];
       for (const hostName of [...activated].reverse()) {
         const rollback = input.plan.rollback.find((entry) => entry.host === hostName);
         if (!rollback) continue;
-        const rollbackResult = await input.executor.run(rollback);
+        const rollbackResult = await runHost(input.executor, rollback);
         if (rollbackResult.ok) rolledBack.push(hostName);
       }
       return {
@@ -116,6 +125,18 @@ export async function executeTwoPhase(input: {
   }
 
   return { ok: true, installId: input.plan.installId, staged };
+}
+
+async function runHost(executor: FleetExecutor, command: HostCommand): Promise<HostResult> {
+  try {
+    return await executor.run(command);
+  } catch (error) {
+    return {
+      host: command.host,
+      ok: false,
+      detail: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 export function gateFleetWithMacClient(input: {

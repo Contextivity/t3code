@@ -59,6 +59,6 @@ Usage:
   t3-ctx promote --channel nightly|stable --manifest <file> --mac-client-version <version>
   t3-ctx updater status|check|update|stage|activate|rollback
   t3-ctx publish-candidate --dir <dir> --repo <owner/repo>
-  t3-ctx fleet update --inventory <file> --manifest <file> [--mac-client-version <version>] [--stage-only]
+  t3-ctx fleet update --inventory <file> --manifest <file> --mac-client-version <version> [--stage-only]
 `;
 }

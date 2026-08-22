@@ -3,11 +3,16 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { flagBool, flagString, parseArgs, usage } from "./args.ts";
-import { CANDIDATE_SERVER_CHECKS, DOWNSTREAM_GITHUB, GENERIC_ACP_FOCUSED_TESTS } from "./config.ts";
+import {
+  CANDIDATE_SERVER_CHECKS,
+  DOWNSTREAM_GITHUB,
+  GENERIC_ACP_FOCUSED_TESTS,
+  PLATFORMS,
+} from "./config.ts";
 import { createGitRunner } from "./git-runner.ts";
 import { resolveGitHubAuth, resolveGitHubEndpoints } from "./github-auth.ts";
 import { formatChecksumFile } from "./hash.ts";
-import { decodeInventory } from "./inventory.ts";
+import { clientGateHost, decodeInventory } from "./inventory.ts";
 import { executeTwoPhase, gateFleetWithMacClient, planFleetUpdate } from "./fleet.ts";
 import {
   buildCandidateManifest,
@@ -28,7 +33,13 @@ import {
   releaseAssetFiles,
   resolveExactReleaseTag,
 } from "./release.ts";
-import { redactCommandResult, spawnCommand } from "./spawn.ts";
+import {
+  HOST_HEALTH_TIMEOUT_MS,
+  HOST_RESTART_TIMEOUT_MS,
+  redactCommandResult,
+  runBoundedHostCommand,
+  spawnCommand,
+} from "./spawn.ts";
 import { failClosed, syncExactUpstreamTag, type SyncFailure } from "./sync.ts";
 import {
   findNamedUpstreamNightly,
@@ -66,6 +77,23 @@ function requireFlag(flags: ReturnType<typeof parseArgs>["flags"], name: string)
     throw new Error(`Missing required --${name}`);
   }
   return value;
+}
+
+function activateVerifyCommands(
+  flags: ReturnType<typeof parseArgs>["flags"],
+): Parameters<typeof activateAndVerify>[0]["commands"] {
+  const restartCommand = flagString(flags, "restart-command");
+  const healthCommand = flagString(flags, "health-command");
+  return {
+    extractArchive: async () => undefined,
+    preflight: async () => ({ code: 0, stdout: "", stderr: "" }),
+    ...(restartCommand
+      ? { restart: () => runBoundedHostCommand(restartCommand, HOST_RESTART_TIMEOUT_MS) }
+      : {}),
+    ...(healthCommand
+      ? { health: () => runBoundedHostCommand(healthCommand, HOST_HEALTH_TIMEOUT_MS) }
+      : {}),
+  };
 }
 
 async function discoverUpstream(remote: string): Promise<UpstreamNightly> {
@@ -250,14 +278,12 @@ async function main(argv: readonly string[]): Promise<number> {
           buildRevision: "check",
           nodeEngine: ">=24",
           createdAt: "2026-08-22T00:00:00.000Z",
-          artifacts: [
-            {
-              platform: "darwin-arm64",
-              name: "placeholder.tar.gz",
-              size: 1,
-              sha256: "a".repeat(64),
-            },
-          ],
+          artifacts: PLATFORMS.map((platform) => ({
+            platform,
+            name: `placeholder-${platform}.tar.gz`,
+            size: 1,
+            sha256: "a".repeat(64),
+          })),
         }),
       });
       writeJson(promotion);
@@ -451,10 +477,7 @@ async function main(argv: readonly string[]): Promise<number> {
         const activated = await activateAndVerify({
           layout,
           installId: staged.installId,
-          commands: {
-            extractArchive: async () => undefined,
-            preflight: async () => ({ code: 0, stdout: "", stderr: "" }),
-          },
+          commands: activateVerifyCommands(parsed.flags),
         });
         writeJson({
           installId: staged.installId,
@@ -473,10 +496,7 @@ async function main(argv: readonly string[]): Promise<number> {
           await activateAndVerify({
             layout,
             installId,
-            commands: {
-              extractArchive: async () => undefined,
-              preflight: async () => ({ code: 0, stdout: "", stderr: "" }),
-            },
+            commands: activateVerifyCommands(parsed.flags),
           }),
         );
         return 0;
@@ -534,13 +554,34 @@ async function main(argv: readonly string[]): Promise<number> {
         readFileSync(requireFlag(parsed.flags, "inventory"), "utf8"),
       );
       const manifest = decodeManifest(readFileSync(requireFlag(parsed.flags, "manifest"), "utf8"));
-      const macClientVersion = flagString(parsed.flags, "mac-client-version");
-      if (macClientVersion) {
-        const gate = gateFleetWithMacClient({ manifest, macClientVersion });
-        if (!gate.ok) {
-          writeJson({ ok: false, reason: gate.reason, failClosed: true });
-          return 2;
-        }
+      if (!clientGateHost(inventory)) {
+        writeJson({
+          ok: false,
+          reason:
+            "inventory must identify exactly one clientGate host for official Mac desktop verification.",
+          failClosed: true,
+        });
+        return 2;
+      }
+      let macClientVersion: string;
+      try {
+        macClientVersion = resolveMacClientVersion({
+          envVersion:
+            flagString(parsed.flags, "mac-client-version") ??
+            process.env.CONTEXTIVITY_T3_MAC_CLIENT_VERSION,
+        });
+      } catch (error) {
+        writeJson({
+          ok: false,
+          reason: error instanceof Error ? error.message : String(error),
+          failClosed: true,
+        });
+        return 2;
+      }
+      const gate = gateFleetWithMacClient({ manifest, macClientVersion });
+      if (!gate.ok) {
+        writeJson({ ok: false, reason: gate.reason, failClosed: true });
+        return 2;
       }
       const plan = planFleetUpdate({
         inventory,
@@ -551,16 +592,24 @@ async function main(argv: readonly string[]): Promise<number> {
         plan,
         executor: {
           run: async (command) => {
-            const spawned = await spawnCommand({
-              command: command.argv[0] ?? "t3-ctx",
-              args: command.argv.slice(1),
-              timeoutMs: 300_000,
-            });
-            return {
-              host: command.host,
-              ok: spawned.code === 0,
-              detail: spawned.stderr.trim() || spawned.stdout.trim(),
-            };
+            try {
+              const spawned = await spawnCommand({
+                command: command.argv[0] ?? "t3-ctx",
+                args: command.argv.slice(1),
+                timeoutMs: 300_000,
+              });
+              return {
+                host: command.host,
+                ok: spawned.code === 0,
+                detail: spawned.stderr.trim() || spawned.stdout.trim(),
+              };
+            } catch (error) {
+              return {
+                host: command.host,
+                ok: false,
+                detail: error instanceof Error ? error.message : String(error),
+              };
+            }
           },
         },
       });

@@ -17,15 +17,15 @@ import {
 } from "./provenance.ts";
 import { resolveGitHubAuth, resolveGitHubEndpoints } from "./github-auth.ts";
 import { promoteCandidate } from "./promote.ts";
+import { GENERIC_ACP_FOCUSED_TESTS, PLATFORMS } from "./config.ts";
 import { buildCandidateManifest } from "./manifest.ts";
 import { nativePrefixesMatchUpstream } from "./pack.ts";
-import { exampleInventoryLooksSafe } from "./inventory.ts";
+import { decodeInventory, exampleInventoryLooksSafe } from "./inventory.ts";
 import {
   expectedWorkflowPaths,
   validatePosixShell,
   validateWorkflowYaml,
 } from "./workflow-validate.ts";
-import { GENERIC_ACP_FOCUSED_TESTS } from "./config.ts";
 import { existsSync } from "node:fs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -37,14 +37,12 @@ const manifest = buildCandidateManifest({
   buildRevision: "run-1",
   nodeEngine: ">=24",
   createdAt: "2026-08-22T00:00:00.000Z",
-  artifacts: [
-    {
-      platform: "darwin-arm64",
-      name: "t3-server-darwin-arm64.tar.gz",
-      size: 1,
-      sha256: "a".repeat(64),
-    },
-  ],
+  artifacts: PLATFORMS.map((platform) => ({
+    platform,
+    name: `t3-server-${platform}.tar.gz`,
+    size: 1,
+    sha256: "a".repeat(64),
+  })),
 });
 
 describe("update and provenance policy", () => {
@@ -146,6 +144,7 @@ describe("workflow YAML and shell portability", () => {
     }
     const inventory = readFileSync(join(repoRoot, "contextivity/inventory.example.json"), "utf8");
     assert.equal(exampleInventoryLooksSafe(inventory), true);
+    assert.equal(decodeInventory(inventory).hosts.filter((host) => host.clientGate).length, 1);
     const upstream = readFileSync(join(repoRoot, "scripts/lib/cli-external-packages.ts"), "utf8");
     assert.equal(nativePrefixesMatchUpstream(upstream), true);
   });

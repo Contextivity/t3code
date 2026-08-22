@@ -79,8 +79,11 @@ Scheduled every three hours (offset from upstream) or `workflow_dispatch` with a
    `msgpackr-extract`, and the rest of the CLI external closure) are platform-specific, so the
    artifact is not platform-neutral.
 5. `write-candidate-manifest` — schema version, upstream version/tag/commit, Contextivity revision,
-   build revision, Node engine, artifact name/size/SHA-256, created time, compatibility.
-6. GitHub OIDC attestations. Checksums are sorted SHA256SUMS files.
+   build revision, Node engine, artifact name/size/SHA-256, created time, compatibility. Construction
+   itself requires exactly the four server platforms (Linux x64/arm64 and macOS x64/arm64) and
+   rejects missing, duplicate, or unsupported artifacts.
+6. GitHub OIDC attestations. Checksums are sorted SHA256SUMS files. SHA256SUMS is a published
+   sidecar; the updater verifies archives against the candidate **manifest** hashes.
 7. Immutable GitHub release `contextivity-candidate/<upstreamVersion>-ctx.<revision>`. Re-runs must
    not overwrite that tag. The merge commit is pushed to `contextivity-sync/<run_id>` so later jobs
    can check it out, then the default branch fast-forwards only after the candidate exists.
@@ -115,8 +118,13 @@ t3-ctx fleet update --inventory ~/.config/contextivity/t3-inventory.json \
   --manifest manifest.json --mac-client-version "$VERSION"
 ```
 
-The coordinator resolves **one** manifest, stages every host, then activates. If staging fails,
-none activate. If activate/health fails, every host that switched is rolled back.
+The coordinator resolves **one** manifest, stages every host, then activates. Activation runs each
+host's configured `restartCommand` and `healthCommand` (bounded) after the symlink switch. If
+staging fails, none activate. If activate, restart, or health fails, every host that switched is
+rolled back. Direct `t3-ctx fleet` fails closed without a verified official Mac desktop version
+(`--mac-client-version` or `CONTEXTIVITY_T3_MAC_CLIENT_VERSION`) that exactly matches
+`manifest.upstreamVersion`. Inventory must name exactly one `clientGate` host — the Mac that holds
+the official desktop app.
 
 ## Host updater
 
@@ -143,7 +151,9 @@ t3-ctx updater rollback
 
 Each host authenticates to GitHub with `CONTEXTIVITY_GITHUB_TOKEN` or an already-logged-in `gh`.
 `update` downloads the exact candidate (or nightly/stable pointer, then that candidate), verifies
-SHA-256, and verifies GitHub attestations when authenticated. Preflight is bounded and must not
+SHA-256 against the **manifest** (not SHA256SUMS), and verifies GitHub attestations when
+authenticated. `t3-ctx updater activate --restart-command … --health-command …` runs those host
+commands after cutover and rolls the local current symlink back if either fails. Preflight is bounded and must not
 advertise an upstream npm install. Cutover is an atomic symlink rename. `--stage-only` stops before
 cutover so the fleet coordinator can activate every host together.
 

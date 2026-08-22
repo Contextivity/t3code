@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { PLATFORMS } from "./config.ts";
 import { buildCandidateManifest, candidateReleaseTag } from "./manifest.ts";
 import {
   assertGhArgvHasNoSecret,
@@ -20,14 +21,12 @@ const manifest = buildCandidateManifest({
   buildRevision: "run-1",
   nodeEngine: ">=24",
   createdAt: "2026-08-22T00:00:00.000Z",
-  artifacts: [
-    {
-      platform: "linux-x64",
-      name: "t3-server-linux-x64.tar.gz",
-      size: 1,
-      sha256: "a".repeat(64),
-    },
-  ],
+  artifacts: PLATFORMS.map((platform) => ({
+    platform,
+    name: `t3-server-${platform}.tar.gz`,
+    size: 1,
+    sha256: "a".repeat(64),
+  })),
 });
 
 describe("candidate GitHub release identity", () => {
