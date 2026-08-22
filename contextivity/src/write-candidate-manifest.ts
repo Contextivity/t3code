@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-import { readdirSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 import { flagString, parseArgs } from "./args.ts";
 import { isArtifactPlatform, type ArtifactPlatform } from "./config.ts";
 import { formatChecksumFile, sha256File } from "./hash.ts";
@@ -36,13 +35,13 @@ export async function writeCandidateManifestFromDir(input: {
     throw new Error(`Not an official nightly tag: ${input.tag}`);
   }
   const artifacts: ManifestArtifact[] = [];
-  for (const name of readdirSync(input.dir).sort()) {
+  for (const name of NodeFS.readdirSync(input.dir).sort()) {
     if (!name.endsWith(".tar.gz")) continue;
-    const filePath = join(input.dir, name);
+    const filePath = NodePath.join(input.dir, name);
     artifacts.push({
       platform: platformFromName(name),
       name,
-      size: statSync(filePath).size,
+      size: NodeFS.statSync(filePath).size,
       sha256: await sha256File(filePath),
     });
   }
@@ -57,13 +56,17 @@ export async function writeCandidateManifestFromDir(input: {
     artifacts,
   });
   const encoded = encodeManifest(manifest);
-  writeFileSync(join(input.dir, "manifest.json"), encoded);
-  writeFileSync(join(input.dir, "SHA256SUMS"), formatChecksumFile(manifest.artifacts));
+  NodeFS.writeFileSync(NodePath.join(input.dir, "manifest.json"), encoded);
+  NodeFS.writeFileSync(
+    NodePath.join(input.dir, "SHA256SUMS"),
+    formatChecksumFile(manifest.artifacts),
+  );
   return encoded;
 }
 
 const invoked =
-  process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+  process.argv[1] !== undefined &&
+  NodeURL.fileURLToPath(import.meta.url) === NodePath.resolve(process.argv[1]);
 if (invoked) {
   const parsed = parseArgs(process.argv.slice(2));
   writeCandidateManifestFromDir({

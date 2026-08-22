@@ -1,6 +1,6 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import {
   CHECKSUMS_FILENAME,
   CONTEXTIVITY_HOME_ENV,
@@ -50,18 +50,18 @@ export interface UpdaterCommands {
   readonly verifyAttestation?: (args: readonly string[]) => Promise<CommandResult>;
 }
 
-export function expandHome(pathValue: string, home: string = homedir()): string {
+export function expandHome(pathValue: string, home: string = NodeOS.homedir()): string {
   if (pathValue === "~") return home;
-  if (pathValue.startsWith("~/")) return join(home, pathValue.slice(2));
+  if (pathValue.startsWith("~/")) return NodePath.join(home, pathValue.slice(2));
   return pathValue;
 }
 
 export function resolveLayoutRoot(
   env: Record<string, string | undefined> = process.env,
-  home: string = homedir(),
+  home: string = NodeOS.homedir(),
 ): string {
   const override = env[CONTEXTIVITY_HOME_ENV]?.trim();
-  return resolve(
+  return NodePath.resolve(
     expandHome(override && override.length > 0 ? override : DEFAULT_LAYOUT_ROOT, home),
   );
 }
@@ -69,9 +69,9 @@ export function resolveLayoutRoot(
 export function layoutAt(root: string): UpdaterLayout {
   return {
     root,
-    versionsDir: join(root, "versions"),
-    currentLink: join(root, CURRENT_LINK),
-    previousLink: join(root, PREVIOUS_LINK),
+    versionsDir: NodePath.join(root, "versions"),
+    currentLink: NodePath.join(root, CURRENT_LINK),
+    previousLink: NodePath.join(root, PREVIOUS_LINK),
   };
 }
 
@@ -80,7 +80,7 @@ export function versionDirFor(layout: UpdaterLayout, installId: string): string 
   if (!parsed) {
     throw new Error(`Invalid install id '${installId}'.`);
   }
-  return join(layout.versionsDir, parsed.installId);
+  return NodePath.join(layout.versionsDir, parsed.installId);
 }
 
 export function currentInstallId(layout: UpdaterLayout): string | null {
@@ -97,7 +97,7 @@ export function previousInstallId(layout: UpdaterLayout): string | null {
 
 export function writeDistributionMarker(versionDir: string, manifest: CandidateManifest): void {
   atomicWriteFile(
-    join(versionDir, MARKER_FILENAME),
+    NodePath.join(versionDir, MARKER_FILENAME),
     `${JSON.stringify(
       {
         upstreamVersion: manifest.upstreamVersion,
@@ -117,7 +117,7 @@ export async function verifyStagedArtifact(input: {
   readonly expectedSize: number;
   readonly name: string;
 }): Promise<void> {
-  const stats = statSync(input.archivePath);
+  const stats = NodeFS.statSync(input.archivePath);
   if (stats.size !== input.expectedSize) {
     throw new Error(
       `Size mismatch for ${input.name}: expected ${input.expectedSize}, got ${stats.size}.`,
@@ -179,20 +179,23 @@ export async function stageCandidate(input: {
     input.manifest.contextivityRevision,
   );
   const versionDir = versionDirFor(input.layout, installId);
-  mkdirSync(input.layout.versionsDir, { recursive: true });
-  rmSync(versionDir, { recursive: true, force: true });
-  mkdirSync(versionDir, { recursive: true });
+  NodeFS.mkdirSync(input.layout.versionsDir, { recursive: true });
+  NodeFS.rmSync(versionDir, { recursive: true, force: true });
+  NodeFS.mkdirSync(versionDir, { recursive: true });
   await input.commands.extractArchive(input.archivePath, versionDir);
   writeDistributionMarker(versionDir, input.manifest);
   atomicWriteFile(
-    join(versionDir, MANIFEST_FILENAME),
+    NodePath.join(versionDir, MANIFEST_FILENAME),
     `${JSON.stringify(input.manifest, null, 2)}\n`,
   );
-  atomicWriteFile(join(versionDir, CHECKSUMS_FILENAME), `${artifact.sha256}  ${artifact.name}\n`);
+  atomicWriteFile(
+    NodePath.join(versionDir, CHECKSUMS_FILENAME),
+    `${artifact.sha256}  ${artifact.name}\n`,
+  );
 
   const preflight = await input.commands.preflight(versionDir);
   if (preflight.code !== 0) {
-    rmSync(versionDir, { recursive: true, force: true });
+    NodeFS.rmSync(versionDir, { recursive: true, force: true });
     throw new Error(
       `Staged preflight failed for ${installId}: ${preflight.stderr || preflight.stdout}`.trim(),
     );
@@ -201,7 +204,7 @@ export async function stageCandidate(input: {
     containsUpstreamPackageFallback(preflight.stdout) ||
     containsUpstreamPackageFallback(preflight.stderr)
   ) {
-    rmSync(versionDir, { recursive: true, force: true });
+    NodeFS.rmSync(versionDir, { recursive: true, force: true });
     throw new Error("Staged server advertised an upstream npm package update path.");
   }
 
@@ -213,15 +216,15 @@ export function activateStaged(input: {
   readonly installId: string;
 }): { readonly current: string; readonly previous: string | null } {
   const versionDir = versionDirFor(input.layout, input.installId);
-  if (!existsSync(versionDir)) {
+  if (!NodeFS.existsSync(versionDir)) {
     throw new Error(`Cannot activate ${input.installId}: staged directory is missing.`);
   }
   const previous = currentInstallId(input.layout);
   if (previous && previous !== input.installId) {
-    atomicSymlink(input.layout.previousLink, join("versions", previous));
+    atomicSymlink(input.layout.previousLink, NodePath.join("versions", previous));
   }
-  atomicSymlink(input.layout.currentLink, join("versions", input.installId));
-  chmodSync(input.layout.root, 0o755);
+  atomicSymlink(input.layout.currentLink, NodePath.join("versions", input.installId));
+  NodeFS.chmodSync(input.layout.root, 0o755);
   return { current: input.installId, previous };
 }
 
@@ -237,8 +240,8 @@ export function rollbackCurrent(layout: UpdaterLayout): {
   if (!previous) {
     throw new Error("Nothing to roll back: previous is unset.");
   }
-  atomicSymlink(layout.currentLink, join("versions", previous));
-  atomicSymlink(layout.previousLink, join("versions", current));
+  atomicSymlink(layout.currentLink, NodePath.join("versions", previous));
+  atomicSymlink(layout.previousLink, NodePath.join("versions", current));
   return { current: previous, rolledBackFrom: current };
 }
 
@@ -289,6 +292,6 @@ export function updaterStatus(layout: UpdaterLayout): {
 export function readInstalledManifest(layout: UpdaterLayout): CandidateManifest | null {
   const current = currentInstallId(layout);
   if (!current) return null;
-  const text = readTextOrNull(join(versionDirFor(layout, current), MANIFEST_FILENAME));
+  const text = readTextOrNull(NodePath.join(versionDirFor(layout, current), MANIFEST_FILENAME));
   return text ? decodeManifest(text) : null;
 }

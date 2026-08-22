@@ -1,5 +1,5 @@
-import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import * as NodeAssert from "node:assert/strict";
+import * as NodeTest from "node:test";
 import { failClosed, syncExactUpstreamTag, type GitRunner } from "./sync.ts";
 import type { UpstreamNightly } from "./upstream.ts";
 import { reportSyncFailureIssue, type IssueClient, type IssueSummary } from "./issues.ts";
@@ -26,31 +26,31 @@ function gitStub(overrides: Partial<GitRunner> = {}): GitRunner {
   };
 }
 
-describe("exact-tag sync fail-closed", () => {
-  it("merges the exact upstream tag when the worktree is clean", async () => {
+NodeTest.describe("exact-tag sync fail-closed", () => {
+  NodeTest.it("merges the exact upstream tag when the worktree is clean", async () => {
     const result = await syncExactUpstreamTag({
       git: gitStub(),
       remote: "origin",
       nightly,
     });
-    assert.equal(result.ok, true);
+    NodeAssert.equal(result.ok, true);
     if (result.ok) {
-      assert.equal(result.tag, nightly.tag);
-      assert.equal(result.alreadyContained, false);
+      NodeAssert.equal(result.tag, nightly.tag);
+      NodeAssert.equal(result.alreadyContained, false);
     }
   });
 
-  it("skips merge when the tag is already an ancestor", async () => {
+  NodeTest.it("skips merge when the tag is already an ancestor", async () => {
     const result = await syncExactUpstreamTag({
       git: gitStub({ isAncestor: async () => true }),
       remote: "origin",
       nightly,
     });
-    assert.equal(result.ok, true);
-    if (result.ok) assert.equal(result.alreadyContained, true);
+    NodeAssert.equal(result.ok, true);
+    if (result.ok) NodeAssert.equal(result.alreadyContained, true);
   });
 
-  it("fails closed on merge conflicts and does not publish", async () => {
+  NodeTest.it("fails closed on merge conflicts and does not publish", async () => {
     let aborted = false;
     const result = await syncExactUpstreamTag({
       git: gitStub({
@@ -62,23 +62,23 @@ describe("exact-tag sync fail-closed", () => {
       remote: "origin",
       nightly,
     });
-    assert.equal(result.ok, false);
-    assert.equal(aborted, true);
+    NodeAssert.equal(result.ok, false);
+    NodeAssert.equal(aborted, true);
     if (!result.ok) {
-      assert.equal(result.failClosed, true);
-      assert.equal(result.publish, false);
-      assert.equal(result.advanceFleet, false);
-      assert.deepEqual(result.conflicts, ["apps/server/src/server.ts"]);
+      NodeAssert.equal(result.failClosed, true);
+      NodeAssert.equal(result.publish, false);
+      NodeAssert.equal(result.advanceFleet, false);
+      NodeAssert.deepEqual(result.conflicts, ["apps/server/src/server.ts"]);
     }
   });
 
-  it("fails closed on dirty worktree, version mismatch, and fetch errors", async () => {
+  NodeTest.it("fails closed on dirty worktree, version mismatch, and fetch errors", async () => {
     const dirty = await syncExactUpstreamTag({
       git: gitStub({ hasUncommittedChanges: async () => true }),
       remote: "origin",
       nightly,
     });
-    assert.equal(dirty.ok, false);
+    NodeAssert.equal(dirty.ok, false);
 
     const mismatch = await syncExactUpstreamTag({
       git: gitStub({
@@ -87,7 +87,7 @@ describe("exact-tag sync fail-closed", () => {
       remote: "origin",
       nightly,
     });
-    assert.equal(mismatch.ok, false);
+    NodeAssert.equal(mismatch.ok, false);
 
     const fetchFail = await syncExactUpstreamTag({
       git: gitStub({
@@ -98,10 +98,10 @@ describe("exact-tag sync fail-closed", () => {
       remote: "origin",
       nightly,
     });
-    assert.equal(fetchFail.ok, false);
+    NodeAssert.equal(fetchFail.ok, false);
   });
 
-  it("deduplicates maintenance issues for the same failed tag", async () => {
+  NodeTest.it("deduplicates maintenance issues for the same failed tag", async () => {
     const existing: IssueSummary = {
       number: 9,
       title: "Contextivity T3 nightly sync failed: v0.0.34-nightly.20260822.2",
@@ -126,9 +126,9 @@ describe("exact-tag sync fail-closed", () => {
       client,
       failClosed(nightly.tag, "conflict", ["a.ts"]),
     );
-    assert.equal(first.created, false);
-    assert.equal(first.issue.number, 9);
-    assert.equal(created.length, 0);
+    NodeAssert.equal(first.created, false);
+    NodeAssert.equal(first.issue.number, 9);
+    NodeAssert.equal(created.length, 0);
 
     const emptyClient: IssueClient = {
       searchOpen: async () => [],
@@ -143,7 +143,7 @@ describe("exact-tag sync fail-closed", () => {
       emptyClient,
       failClosed(nightly.tag, "conflict", ["a.ts"]),
     );
-    assert.equal(second.created, true);
-    assert.equal(second.issue.number, 11);
+    NodeAssert.equal(second.created, true);
+    NodeAssert.equal(second.issue.number, 11);
   });
 });

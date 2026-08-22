@@ -1,5 +1,5 @@
-import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import { DOWNSTREAM_GITHUB, POINTER_TAGS } from "./config.ts";
 import { parseInstallId } from "./identity.ts";
 import { type CandidateManifest } from "./manifest.ts";
@@ -103,10 +103,10 @@ export function assertGhArgvHasNoSecret(
 }
 
 export function releaseAssetFiles(dir: string): string[] {
-  return readdirSync(dir)
+  return NodeFS.readdirSync(dir)
     .filter((name) => !name.startsWith(".") && !name.startsWith("stage-"))
     .sort()
-    .map((name) => join(dir, name));
+    .map((name) => NodePath.join(dir, name));
 }
 
 export function resolveExactReleaseTag(input: {

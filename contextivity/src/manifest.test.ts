@@ -1,8 +1,8 @@
-import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as NodeAssert from "node:assert/strict";
+import * as NodeTest from "node:test";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { PLATFORMS } from "./config.ts";
 import {
   assertManifestDeterministic,
@@ -55,28 +55,28 @@ function sample() {
   });
 }
 
-describe("candidate manifest", () => {
-  it("encodes a deterministic schema including dual identity and artifacts", () => {
+NodeTest.describe("candidate manifest", () => {
+  NodeTest.it("encodes a deterministic schema including dual identity and artifacts", () => {
     const manifest = sample();
     assertManifestDeterministic(manifest);
     const encoded = encodeManifest(manifest);
     const again = encodeManifest(decodeManifest(encoded));
-    assert.equal(encoded, again);
-    assert.equal(manifestDigest(manifest), sha256Text(encoded));
-    assert.equal(manifest.compatibility.protocolVersion, manifest.upstreamVersion);
-    assert.equal(manifest.compatibility.upstreamNpmPackage, "forbidden");
-    assert.equal(
+    NodeAssert.equal(encoded, again);
+    NodeAssert.equal(manifestDigest(manifest), sha256Text(encoded));
+    NodeAssert.equal(manifest.compatibility.protocolVersion, manifest.upstreamVersion);
+    NodeAssert.equal(manifest.compatibility.upstreamNpmPackage, "forbidden");
+    NodeAssert.equal(
       candidateReleaseTag(manifest),
       "contextivity-candidate/0.0.34-nightly.20260822.2-ctx.def4567",
     );
-    assert.deepEqual(
+    NodeAssert.deepEqual(
       manifest.artifacts.map((entry) => entry.platform),
       [...PLATFORMS],
     );
   });
 
-  it("rejects missing, duplicate, or unsupported artifact platforms", () => {
-    assert.throws(
+  NodeTest.it("rejects missing, duplicate, or unsupported artifact platforms", () => {
+    NodeAssert.throws(
       () =>
         buildCandidateManifest({
           upstreamVersion: "0.0.34-nightly.20260822.2",
@@ -89,7 +89,7 @@ describe("candidate manifest", () => {
         }),
       /exactly the four server platforms/,
     );
-    assert.throws(
+    NodeAssert.throws(
       () =>
         buildCandidateManifest({
           upstreamVersion: "0.0.34-nightly.20260822.2",
@@ -109,7 +109,7 @@ describe("candidate manifest", () => {
         }),
       /Duplicate artifact/,
     );
-    assert.throws(
+    NodeAssert.throws(
       () =>
         buildCandidateManifest({
           upstreamVersion: "0.0.34-nightly.20260822.2",
@@ -132,72 +132,80 @@ describe("candidate manifest", () => {
     );
   });
 
-  it("constructs a candidate only when the directory has all four platform archives", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ctx-manifest-dir-"));
-    for (const platform of PLATFORMS) {
-      writeFileSync(join(dir, `t3-server-${platform}.tar.gz`), platform);
-    }
-    const encoded = await writeCandidateManifestFromDir({
-      tag: "v0.0.34-nightly.20260822.2",
-      sha: "c".repeat(40),
-      dir,
-      buildRevision: "run-1",
-      nodeEngine: ">=24",
-      contextivityRevision: "def4567",
-      createdAt: "2026-08-22T12:00:00.000Z",
-    });
-    const written = decodeManifest(encoded);
-    assert.equal(written.artifacts.length, 4);
-    assert.equal(existsSync(join(dir, "SHA256SUMS")), true);
-    assert.equal(existsSync(join(dir, "manifest.json")), true);
-    assert.match(readFileSync(join(dir, "SHA256SUMS"), "utf8"), /t3-server-linux-x64\.tar\.gz/);
-    const incomplete = mkdtempSync(join(tmpdir(), "ctx-manifest-missing-"));
-    writeFileSync(join(incomplete, "t3-server-linux-x64.tar.gz"), "only-one");
-    await assert.rejects(
-      () =>
-        writeCandidateManifestFromDir({
-          tag: "v0.0.34-nightly.20260822.2",
-          sha: "c".repeat(40),
-          dir: incomplete,
-          buildRevision: "run-1",
-          nodeEngine: ">=24",
-          contextivityRevision: "def4567",
-        }),
-      /exactly the four server platforms/,
-    );
-  });
+  NodeTest.it(
+    "constructs a candidate only when the directory has all four platform archives",
+    async () => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "ctx-manifest-dir-"));
+      for (const platform of PLATFORMS) {
+        NodeFS.writeFileSync(NodePath.join(dir, `t3-server-${platform}.tar.gz`), platform);
+      }
+      const encoded = await writeCandidateManifestFromDir({
+        tag: "v0.0.34-nightly.20260822.2",
+        sha: "c".repeat(40),
+        dir,
+        buildRevision: "run-1",
+        nodeEngine: ">=24",
+        contextivityRevision: "def4567",
+        createdAt: "2026-08-22T12:00:00.000Z",
+      });
+      const written = decodeManifest(encoded);
+      NodeAssert.equal(written.artifacts.length, 4);
+      NodeAssert.equal(NodeFS.existsSync(NodePath.join(dir, "SHA256SUMS")), true);
+      NodeAssert.equal(NodeFS.existsSync(NodePath.join(dir, "manifest.json")), true);
+      NodeAssert.match(
+        NodeFS.readFileSync(NodePath.join(dir, "SHA256SUMS"), "utf8"),
+        /t3-server-linux-x64\.tar\.gz/,
+      );
+      const incomplete = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "ctx-manifest-missing-"),
+      );
+      NodeFS.writeFileSync(NodePath.join(incomplete, "t3-server-linux-x64.tar.gz"), "only-one");
+      await NodeAssert.rejects(
+        () =>
+          writeCandidateManifestFromDir({
+            tag: "v0.0.34-nightly.20260822.2",
+            sha: "c".repeat(40),
+            dir: incomplete,
+            buildRevision: "run-1",
+            nodeEngine: ">=24",
+            contextivityRevision: "def4567",
+          }),
+        /exactly the four server platforms/,
+      );
+    },
+  );
 
-  it("rejects schema drift and protocol/version mismatch", () => {
+  NodeTest.it("rejects schema drift and protocol/version mismatch", () => {
     const encoded = encodeManifest(sample());
-    assert.throws(() =>
+    NodeAssert.throws(() =>
       decodeManifest(encoded.replace('"schemaVersion": 1', '"schemaVersion": 2')),
     );
-    assert.throws(() =>
+    NodeAssert.throws(() =>
       decodeManifest(
         encoded.replace('"upstreamNpmPackage": "forbidden"', '"upstreamNpmPackage": "allowed"'),
       ),
     );
   });
 
-  it("selects the host platform artifact", () => {
+  NodeTest.it("selects the host platform artifact", () => {
     const manifest = sample();
-    assert.equal(selectArtifact(manifest, "linux-x64").name, artifact.name);
-    assert.equal(hostPlatformFromNode("linux", "arm64").platform, "linux-arm64");
-    assert.equal(hostPlatformFromNode("darwin", "x64").platform, "darwin-x64");
-    assert.equal(
+    NodeAssert.equal(selectArtifact(manifest, "linux-x64").name, artifact.name);
+    NodeAssert.equal(hostPlatformFromNode("linux", "arm64").platform, "linux-arm64");
+    NodeAssert.equal(hostPlatformFromNode("darwin", "x64").platform, "darwin-x64");
+    NodeAssert.equal(
       selectHostArtifact(manifest, { platform: "linux", arch: "x64" }).platform,
       "linux-x64",
     );
-    assert.throws(() => detectHostPlatform({ platform: "win32", arch: "x64" }));
+    NodeAssert.throws(() => detectHostPlatform({ platform: "win32", arch: "x64" }));
   });
 
-  it("writes checksum files in sorted, sha256sum-compatible form", () => {
+  NodeTest.it("writes checksum files in sorted, sha256sum-compatible form", () => {
     const text = formatChecksumFile([
       { name: "b.tar.gz", sha256: "b".repeat(64) },
       { name: "a.tar.gz", sha256: "a".repeat(64) },
     ]);
-    assert.equal(text.startsWith(`${"a".repeat(64)}  a.tar.gz\n`), true);
-    assert.deepEqual(
+    NodeAssert.equal(text.startsWith(`${"a".repeat(64)}  a.tar.gz\n`), true);
+    NodeAssert.deepEqual(
       parseChecksumFile(text).map((entry) => entry.name),
       ["a.tar.gz", "b.tar.gz"],
     );

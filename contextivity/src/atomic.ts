@@ -1,31 +1,25 @@
-import {
-  chmodSync,
-  mkdirSync,
-  readFileSync,
-  readlinkSync,
-  renameSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
-import { randomBytes } from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeOS from "node:os";
+import * as NodeCrypto from "node:crypto";
 
 export function atomicWriteFile(
   filePath: string,
   contents: string | Uint8Array,
   mode?: number,
 ): void {
-  mkdirSync(dirname(filePath), { recursive: true });
-  const tempPath = join(dirname(filePath), `.${randomBytes(8).toString("hex")}.tmp`);
+  NodeFS.mkdirSync(NodePath.dirname(filePath), { recursive: true });
+  const tempPath = NodePath.join(
+    NodePath.dirname(filePath),
+    `.${NodeCrypto.randomBytes(8).toString("hex")}.tmp`,
+  );
   try {
-    writeFileSync(tempPath, contents);
-    if (mode !== undefined) chmodSync(tempPath, mode);
-    renameSync(tempPath, filePath);
+    NodeFS.writeFileSync(tempPath, contents);
+    if (mode !== undefined) NodeFS.chmodSync(tempPath, mode);
+    NodeFS.renameSync(tempPath, filePath);
   } catch (error) {
     try {
-      rmSync(tempPath, { force: true });
+      NodeFS.rmSync(tempPath, { force: true });
     } catch {
       // ignore cleanup
     }
@@ -34,14 +28,17 @@ export function atomicWriteFile(
 }
 
 export function atomicSymlink(linkPath: string, target: string): void {
-  mkdirSync(dirname(linkPath), { recursive: true });
-  const tempPath = join(dirname(linkPath), `.${randomBytes(8).toString("hex")}.tmp-link`);
+  NodeFS.mkdirSync(NodePath.dirname(linkPath), { recursive: true });
+  const tempPath = NodePath.join(
+    NodePath.dirname(linkPath),
+    `.${NodeCrypto.randomBytes(8).toString("hex")}.tmp-link`,
+  );
   try {
-    symlinkSync(target, tempPath);
-    renameSync(tempPath, linkPath);
+    NodeFS.symlinkSync(target, tempPath);
+    NodeFS.renameSync(tempPath, linkPath);
   } catch (error) {
     try {
-      rmSync(tempPath, { force: true });
+      NodeFS.rmSync(tempPath, { force: true });
     } catch {
       // ignore cleanup
     }
@@ -51,7 +48,7 @@ export function atomicSymlink(linkPath: string, target: string): void {
 
 export function readLinkOrNull(linkPath: string): string | null {
   try {
-    return readlinkSync(linkPath);
+    return NodeFS.readlinkSync(linkPath);
   } catch {
     return null;
   }
@@ -59,14 +56,17 @@ export function readLinkOrNull(linkPath: string): string | null {
 
 export function readTextOrNull(filePath: string): string | null {
   try {
-    return readFileSync(filePath, "utf8");
+    return NodeFS.readFileSync(filePath, "utf8");
   } catch {
     return null;
   }
 }
 
 export function uniqueTempDir(prefix: string): string {
-  const dir = join(tmpdir(), `${prefix}-${randomBytes(8).toString("hex")}`);
-  mkdirSync(dir, { recursive: true });
+  const dir = NodePath.join(
+    NodeOS.tmpdir(),
+    `${prefix}-${NodeCrypto.randomBytes(8).toString("hex")}`,
+  );
+  NodeFS.mkdirSync(dir, { recursive: true });
   return dir;
 }

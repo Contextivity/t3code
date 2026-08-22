@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import * as NodeChildProcess from "node:child_process";
 import type { CommandResult } from "./updater.ts";
 import { redactSecrets } from "./github-auth.ts";
 
@@ -40,7 +40,7 @@ export async function runBoundedHostCommand(
 export function spawnCommand(request: SpawnRequest): Promise<CommandResult> {
   const { command, args = [], cwd, env, timeoutMs, input } = request;
   return new Promise((resolve, reject) => {
-    const child = spawn(command, [...args], {
+    const child = NodeChildProcess.spawn(command, [...args], {
       cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],

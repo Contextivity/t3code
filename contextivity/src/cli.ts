@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 import { flagBool, flagString, parseArgs, usage } from "./args.ts";
 import { hostCommandFromFlags } from "./host-command.ts";
 import {
@@ -66,7 +66,7 @@ import {
 } from "./workflow-validate.ts";
 import { tarExtractArgs } from "./pack.ts";
 
-const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const repoRoot = NodePath.resolve(NodeURL.fileURLToPath(new URL("../..", import.meta.url)));
 
 function writeJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -249,11 +249,14 @@ async function main(argv: readonly string[]): Promise<number> {
     case "validate-workflows": {
       const errors: string[] = [];
       for (const relative of expectedWorkflowPaths()) {
-        const yaml = readFileSync(join(repoRoot, relative), "utf8");
+        const yaml = NodeFS.readFileSync(NodePath.join(repoRoot, relative), "utf8");
         const result = validateWorkflowYaml(relative, yaml);
         if (!result.ok) errors.push(...result.errors);
       }
-      const wrapper = readFileSync(join(repoRoot, "contextivity/bin/t3-ctx"), "utf8");
+      const wrapper = NodeFS.readFileSync(
+        NodePath.join(repoRoot, "contextivity/bin/t3-ctx"),
+        "utf8",
+      );
       errors.push(...validatePosixShell(wrapper, "contextivity/bin/t3-ctx"));
       if (errors.length > 0) {
         process.stderr.write(`${errors.join("\n")}\n`);
@@ -311,10 +314,10 @@ async function main(argv: readonly string[]): Promise<number> {
       const encoded = encodeManifest(manifest);
       const out = flagString(parsed.flags, "out");
       if (out) {
-        mkdirSync(dirname(resolve(out)), { recursive: true });
-        writeFileSync(out, encoded);
-        writeFileSync(
-          join(dirname(resolve(out)), "SHA256SUMS"),
+        NodeFS.mkdirSync(NodePath.dirname(NodePath.resolve(out)), { recursive: true });
+        NodeFS.writeFileSync(out, encoded);
+        NodeFS.writeFileSync(
+          NodePath.join(NodePath.dirname(NodePath.resolve(out)), "SHA256SUMS"),
           formatChecksumFile(manifest.artifacts),
         );
       }
@@ -322,7 +325,9 @@ async function main(argv: readonly string[]): Promise<number> {
       return 0;
     }
     case "promote": {
-      const manifest = decodeManifest(readFileSync(requireFlag(parsed.flags, "manifest"), "utf8"));
+      const manifest = decodeManifest(
+        NodeFS.readFileSync(requireFlag(parsed.flags, "manifest"), "utf8"),
+      );
       const result = promoteCandidate({
         channel: requireFlag(parsed.flags, "channel") as "nightly" | "stable",
         manifest,
@@ -363,8 +368,8 @@ async function main(argv: readonly string[]): Promise<number> {
           version: flagString(parsed.flags, "version"),
           channel: flagString(parsed.flags, "channel"),
         });
-        const cacheDir = join(layout.root, "cache");
-        mkdirSync(cacheDir, { recursive: true });
+        const cacheDir = NodePath.join(layout.root, "cache");
+        NodeFS.mkdirSync(cacheDir, { recursive: true });
         const ghEnv = token ? { ...process.env, GH_TOKEN: token } : process.env;
         const runGh = async (args: readonly string[]) => {
           assertGhArgvHasNoSecret(args, [token]);
@@ -379,8 +384,8 @@ async function main(argv: readonly string[]): Promise<number> {
         let installId = target.installId;
         let candidateTag = target.tag;
         if (target.pointer) {
-          const pointerDir = join(cacheDir, "pointer");
-          mkdirSync(pointerDir, { recursive: true });
+          const pointerDir = NodePath.join(cacheDir, "pointer");
+          NodeFS.mkdirSync(pointerDir, { recursive: true });
           const downloaded = await runGh(
             ghReleaseDownloadArgs({
               tag: target.tag,
@@ -393,7 +398,7 @@ async function main(argv: readonly string[]): Promise<number> {
             throw new Error(downloaded.stderr || `Failed to download ${target.tag}.`);
           }
           const pointer = decodeChannelPointer(
-            readFileSync(join(pointerDir, "pointer.json"), "utf8"),
+            NodeFS.readFileSync(NodePath.join(pointerDir, "pointer.json"), "utf8"),
           );
           installId = pointer.installId;
           candidateTag = pointer.candidateTag;
@@ -411,8 +416,8 @@ async function main(argv: readonly string[]): Promise<number> {
           });
           return 0;
         }
-        const artifactDir = join(cacheDir, installId);
-        mkdirSync(artifactDir, { recursive: true });
+        const artifactDir = NodePath.join(cacheDir, installId);
+        NodeFS.mkdirSync(artifactDir, { recursive: true });
         const platform = detectHostPlatform().platform;
         for (const pattern of ["manifest.json", `t3-server-${platform}.tar.gz`, "SHA256SUMS"]) {
           const downloaded = await runGh(
@@ -429,8 +434,10 @@ async function main(argv: readonly string[]): Promise<number> {
             );
           }
         }
-        const manifest = decodeManifest(readFileSync(join(artifactDir, "manifest.json"), "utf8"));
-        const archivePath = join(artifactDir, `t3-server-${platform}.tar.gz`);
+        const manifest = decodeManifest(
+          NodeFS.readFileSync(NodePath.join(artifactDir, "manifest.json"), "utf8"),
+        );
+        const archivePath = NodePath.join(artifactDir, `t3-server-${platform}.tar.gz`);
         const staged = await stageCandidate({
           layout,
           manifest,
@@ -452,7 +459,7 @@ async function main(argv: readonly string[]): Promise<number> {
             preflight: async (versionDir) =>
               spawnCommand({
                 command: "node",
-                args: [join(versionDir, "dist/bin.mjs"), "--help"],
+                args: [NodePath.join(versionDir, "dist/bin.mjs"), "--help"],
                 env: { ...process.env, CONTEXTIVITY_T3_DISTRIBUTION: "1" },
                 timeoutMs: 30_000,
               }),
@@ -504,7 +511,7 @@ async function main(argv: readonly string[]): Promise<number> {
       }
       if (action === "stage") {
         const manifest = decodeManifest(
-          readFileSync(requireFlag(parsed.flags, "manifest"), "utf8"),
+          NodeFS.readFileSync(requireFlag(parsed.flags, "manifest"), "utf8"),
         );
         const archivePath = requireFlag(parsed.flags, "archive");
         const token = await githubToken();
@@ -529,7 +536,7 @@ async function main(argv: readonly string[]): Promise<number> {
             preflight: async (versionDir) =>
               spawnCommand({
                 command: "node",
-                args: [join(versionDir, "dist/bin.mjs"), "--help"],
+                args: [NodePath.join(versionDir, "dist/bin.mjs"), "--help"],
                 env: { ...process.env, CONTEXTIVITY_T3_DISTRIBUTION: "1" },
                 timeoutMs: 30_000,
               }),
@@ -552,9 +559,11 @@ async function main(argv: readonly string[]): Promise<number> {
     case "fleet": {
       const action = parsed.positionals[0] ?? "update";
       const inventory = decodeInventory(
-        readFileSync(requireFlag(parsed.flags, "inventory"), "utf8"),
+        NodeFS.readFileSync(requireFlag(parsed.flags, "inventory"), "utf8"),
       );
-      const manifest = decodeManifest(readFileSync(requireFlag(parsed.flags, "manifest"), "utf8"));
+      const manifest = decodeManifest(
+        NodeFS.readFileSync(requireFlag(parsed.flags, "manifest"), "utf8"),
+      );
       if (!clientGateHost(inventory)) {
         writeJson({
           ok: false,
@@ -621,7 +630,9 @@ async function main(argv: readonly string[]): Promise<number> {
       const dir = requireFlag(parsed.flags, "dir");
       const repo =
         flagString(parsed.flags, "repo") ?? `${DOWNSTREAM_GITHUB.owner}/${DOWNSTREAM_GITHUB.repo}`;
-      const manifest = decodeManifest(readFileSync(join(dir, "manifest.json"), "utf8"));
+      const manifest = decodeManifest(
+        NodeFS.readFileSync(NodePath.join(dir, "manifest.json"), "utf8"),
+      );
       const tag = candidateReleaseTag(manifest);
       const token = await githubToken();
       const ghEnv = token ? { ...process.env, GH_TOKEN: token } : process.env;
@@ -668,7 +679,8 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 }
 
-const invoked = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+const invoked =
+  process.argv[1] && NodeURL.fileURLToPath(import.meta.url) === NodePath.resolve(process.argv[1]);
 if (invoked) {
   main(process.argv.slice(2)).then(
     (code) => {

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 import { flagString, parseArgs } from "./args.ts";
 import { isArtifactPlatform } from "./config.ts";
 import {
@@ -28,14 +28,14 @@ export async function packServerArchive(input: {
   if (!isArtifactPlatform(input.platform)) {
     throw new Error(`Unknown platform '${input.platform}'.`);
   }
-  const stagingDir = join(input.outDir, `stage-${input.platform}`);
-  const archivePath = join(input.outDir, `t3-server-${input.platform}.tar.gz`);
-  mkdirSync(input.outDir, { recursive: true });
+  const stagingDir = NodePath.join(input.outDir, `stage-${input.platform}`);
+  const archivePath = NodePath.join(input.outDir, `t3-server-${input.platform}.tar.gz`);
+  NodeFS.mkdirSync(input.outDir, { recursive: true });
   const nativeModuleDirs = collectNativeModuleDirs(input.repoRoot);
   requirePackedNodePty(nativeModuleDirs);
   stageServerTree({
     stagingDir,
-    distDir: join(input.repoRoot, "apps/server/dist"),
+    distDir: NodePath.join(input.repoRoot, "apps/server/dist"),
     nativeModuleDirs,
     upstreamVersion: input.upstreamVersion,
     contextivityRevision: input.contextivityRevision,
@@ -51,9 +51,10 @@ export async function packServerArchive(input: {
   return archivePath;
 }
 
-const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const repoRoot = NodePath.resolve(NodeURL.fileURLToPath(new URL("../..", import.meta.url)));
 const invoked =
-  process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+  process.argv[1] !== undefined &&
+  NodeURL.fileURLToPath(import.meta.url) === NodePath.resolve(process.argv[1]);
 if (invoked) {
   const parsed = parseArgs(process.argv.slice(2));
   packServerArchive({

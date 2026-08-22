@@ -1,9 +1,9 @@
-import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, it } from "node:test";
+import * as NodeAssert from "node:assert/strict";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeTest from "node:test";
 import { parseArgs, usage } from "./args.ts";
 import { main } from "./cli.ts";
 import { CONTEXTIVITY_HOME_ENV, PLATFORMS } from "./config.ts";
@@ -63,7 +63,7 @@ function fourArtifacts(): ManifestArtifact[] {
 }
 
 function sshFlattenedRemoteArgv(argv: readonly string[]): string[] {
-  assert.equal(argv[0], "ssh");
+  NodeAssert.equal(argv[0], "ssh");
   const separator = argv.indexOf("--");
   const remote = argv.slice(separator === -1 ? 2 : separator + 1);
   return remote.join(" ").split(/\s+/);
@@ -79,13 +79,13 @@ const manifest = buildCandidateManifest({
   artifacts: fourArtifacts(),
 });
 
-describe("fleet two-phase update", () => {
-  it("resolves one identity and stages every host before activate", () => {
+NodeTest.describe("fleet two-phase update", () => {
+  NodeTest.it("resolves one identity and stages every host before activate", () => {
     const plan = planFleetUpdate({ inventory, manifest });
-    assert.equal(plan.installId, "0.0.34-nightly.20260822.2-ctx.abc1234");
-    assert.equal(plan.stage.length, 3);
-    assert.equal(plan.activate.length, 3);
-    assert.deepEqual(plan.stage[0]?.argv, [
+    NodeAssert.equal(plan.installId, "0.0.34-nightly.20260822.2-ctx.abc1234");
+    NodeAssert.equal(plan.stage.length, 3);
+    NodeAssert.equal(plan.activate.length, 3);
+    NodeAssert.deepEqual(plan.stage[0]?.argv, [
       "t3-ctx",
       "updater",
       "update",
@@ -93,16 +93,16 @@ describe("fleet two-phase update", () => {
       plan.installId,
       "--stage-only",
     ]);
-    assert.deepEqual(plan.stage[1]?.argv.slice(0, 3), ["ssh", "builder", "--"]);
+    NodeAssert.deepEqual(plan.stage[1]?.argv.slice(0, 3), ["ssh", "builder", "--"]);
   });
 
-  it("passes each host restart and health command through remote activate", () => {
+  NodeTest.it("passes each host restart and health command through remote activate", () => {
     const plan = planFleetUpdate({ inventory, manifest });
     const workstationRestart = encodeHostCommandArg("launchctl kickstart workstation");
     const workstationHealth = encodeHostCommandArg(
       "curl -sf --max-time 5 http://127.0.0.1:3000/health",
     );
-    assert.deepEqual(plan.activate[0]?.argv, [
+    NodeAssert.deepEqual(plan.activate[0]?.argv, [
       "t3-ctx",
       "updater",
       "activate",
@@ -113,18 +113,18 @@ describe("fleet two-phase update", () => {
       `--${HEALTH_COMMAND_B64_FLAG}`,
       workstationHealth,
     ]);
-    assert.equal(plan.activate[1]?.argv.includes("launchctl kickstart builder"), false);
-    assert.equal(plan.activate[2]?.argv.includes(`--${HEALTH_COMMAND_B64_FLAG}`), true);
+    NodeAssert.equal(plan.activate[1]?.argv.includes("launchctl kickstart builder"), false);
+    NodeAssert.equal(plan.activate[2]?.argv.includes(`--${HEALTH_COMMAND_B64_FLAG}`), true);
     const lab = plan.activate[2];
-    assert.ok(lab);
+    NodeAssert.ok(lab);
     const encodedRestart = lab.argv[lab.argv.indexOf(`--${RESTART_COMMAND_B64_FLAG}`) + 1];
-    assert.equal(
+    NodeAssert.equal(
       decodeHostCommandArg(encodedRestart ?? ""),
       "systemctl --user restart contextivity-t3",
     );
   });
 
-  it("preserves quoted multi-word commands after SSH concatenates argv", () => {
+  NodeTest.it("preserves quoted multi-word commands after SSH concatenates argv", () => {
     const restartCommand = `printf '%s' "kickstart 'builder'; done"`;
     const healthCommand = "curl -sf --max-time 5 http://127.0.0.1:3001/health";
     const host = {
@@ -149,20 +149,20 @@ describe("fleet two-phase update", () => {
       healthCommand,
     ];
     const broken = parseArgs(sshFlattenedRemoteArgv(rawBroken).slice(1));
-    assert.equal(broken.flags["restart-command"], "printf");
-    assert.notEqual(hostCommandFromFlags(broken.flags, "restart"), restartCommand);
+    NodeAssert.equal(broken.flags["restart-command"], "printf");
+    NodeAssert.notEqual(hostCommandFromFlags(broken.flags, "restart"), restartCommand);
 
     const encodedArgv = hostArgv(host, updaterActivateArgs(host, "id")).argv;
-    assert.equal(
+    NodeAssert.equal(
       encodedArgv.some((token) => token.includes(" ") || /[;|&$'"<>]/.test(token)),
       false,
     );
     const parsed = parseArgs(sshFlattenedRemoteArgv(encodedArgv).slice(1));
-    assert.equal(hostCommandFromFlags(parsed.flags, "restart"), restartCommand);
-    assert.equal(hostCommandFromFlags(parsed.flags, "health"), healthCommand);
+    NodeAssert.equal(hostCommandFromFlags(parsed.flags, "restart"), restartCommand);
+    NodeAssert.equal(hostCommandFromFlags(parsed.flags, "health"), healthCommand);
   });
 
-  it("activates none when any host fails staging", async () => {
+  NodeTest.it("activates none when any host fails staging", async () => {
     const plan = planFleetUpdate({ inventory, manifest });
     const activated: string[] = [];
     const result = await executeTwoPhase({
@@ -177,16 +177,16 @@ describe("fleet two-phase update", () => {
         },
       },
     });
-    assert.equal(result.ok, false);
+    NodeAssert.equal(result.ok, false);
     if (!result.ok) {
-      assert.equal(result.phase, "stage");
-      assert.equal(result.activateNone, true);
-      assert.equal(result.failedHost, "builder");
+      NodeAssert.equal(result.phase, "stage");
+      NodeAssert.equal(result.activateNone, true);
+      NodeAssert.equal(result.failedHost, "builder");
     }
-    assert.deepEqual(activated, []);
+    NodeAssert.deepEqual(activated, []);
   });
 
-  it("rolls back every host that switched when activation fails", async () => {
+  NodeTest.it("rolls back every host that switched when activation fails", async () => {
     const plan = planFleetUpdate({ inventory, manifest });
     const events: string[] = [];
     const result = await executeTwoPhase({
@@ -201,14 +201,14 @@ describe("fleet two-phase update", () => {
         },
       },
     });
-    assert.equal(result.ok, false);
+    NodeAssert.equal(result.ok, false);
     if (!result.ok) {
-      assert.equal(result.phase, "activate");
-      assert.deepEqual(result.rolledBack, ["builder", "workstation"]);
+      NodeAssert.equal(result.phase, "activate");
+      NodeAssert.deepEqual(result.rolledBack, ["builder", "workstation"]);
     }
   });
 
-  it("rolls back switched hosts when restart or health on activate fails", async () => {
+  NodeTest.it("rolls back switched hosts when restart or health on activate fails", async () => {
     const plan = planFleetUpdate({ inventory, manifest });
     const result = await executeTwoPhase({
       plan,
@@ -225,51 +225,54 @@ describe("fleet two-phase update", () => {
         },
       },
     });
-    assert.equal(result.ok, false);
+    NodeAssert.equal(result.ok, false);
     if (!result.ok) {
-      assert.equal(result.phase, "activate");
-      assert.equal(result.failedHost, "builder");
-      assert.deepEqual(result.rolledBack, ["workstation"]);
+      NodeAssert.equal(result.phase, "activate");
+      NodeAssert.equal(result.failedHost, "builder");
+      NodeAssert.deepEqual(result.rolledBack, ["workstation"]);
     }
   });
 
-  it("treats thrown activate/restart/health errors as host failure and rolls back", async () => {
-    const plan = planFleetUpdate({ inventory, manifest });
-    const result = await executeTwoPhase({
-      plan,
-      executor: {
-        run: async (command) => {
-          if (command.host === "lab" && command.argv.includes(`--${RESTART_COMMAND_B64_FLAG}`)) {
-            throw new Error("restart timed out");
-          }
-          return { host: command.host, ok: true, detail: "ok" };
+  NodeTest.it(
+    "treats thrown activate/restart/health errors as host failure and rolls back",
+    async () => {
+      const plan = planFleetUpdate({ inventory, manifest });
+      const result = await executeTwoPhase({
+        plan,
+        executor: {
+          run: async (command) => {
+            if (command.host === "lab" && command.argv.includes(`--${RESTART_COMMAND_B64_FLAG}`)) {
+              throw new Error("restart timed out");
+            }
+            return { host: command.host, ok: true, detail: "ok" };
+          },
         },
-      },
-    });
-    assert.equal(result.ok, false);
-    if (!result.ok) {
-      assert.equal(result.phase, "activate");
-      assert.equal(result.failedHost, "lab");
-      assert.equal(result.detail, "restart timed out");
-      assert.deepEqual(result.rolledBack, ["builder", "workstation"]);
-    }
-  });
+      });
+      NodeAssert.equal(result.ok, false);
+      if (!result.ok) {
+        NodeAssert.equal(result.phase, "activate");
+        NodeAssert.equal(result.failedHost, "lab");
+        NodeAssert.equal(result.detail, "restart timed out");
+        NodeAssert.deepEqual(result.rolledBack, ["builder", "workstation"]);
+      }
+    },
+  );
 
-  it("fails closed when the official Mac client version does not match", () => {
+  NodeTest.it("fails closed when the official Mac client version does not match", () => {
     const mismatch = gateFleetWithMacClient({
       manifest,
       macClientVersion: "0.0.33-nightly.20260821.1",
     });
-    assert.equal(mismatch.ok, false);
+    NodeAssert.equal(mismatch.ok, false);
     const match = gateFleetWithMacClient({
       manifest,
       macClientVersion: "0.0.34-nightly.20260822.2",
     });
-    assert.equal(match.ok, true);
+    NodeAssert.equal(match.ok, true);
   });
 
-  it("requires exactly one clientGate host in inventory", () => {
-    assert.throws(
+  NodeTest.it("requires exactly one clientGate host in inventory", () => {
+    NodeAssert.throws(
       () =>
         decodeInventory(`{
           "schemaVersion": 1,
@@ -281,7 +284,7 @@ describe("fleet two-phase update", () => {
         }`),
       /clientGate/,
     );
-    assert.throws(
+    NodeAssert.throws(
       () =>
         decodeInventory(`{
           "schemaVersion": 1,
@@ -296,17 +299,17 @@ describe("fleet two-phase update", () => {
   });
 });
 
-describe("direct t3-ctx fleet gate", () => {
-  it("documents mac-client-version as required for fleet activation", () => {
-    assert.match(usage(), /t3-ctx fleet update .* --mac-client-version <version>/);
-    assert.equal(usage().includes("[--mac-client-version"), false);
+NodeTest.describe("direct t3-ctx fleet gate", () => {
+  NodeTest.it("documents mac-client-version as required for fleet activation", () => {
+    NodeAssert.match(usage(), /t3-ctx fleet update .* --mac-client-version <version>/);
+    NodeAssert.equal(usage().includes("[--mac-client-version"), false);
   });
 
-  it("fails closed without a verified official Mac desktop version", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ctx-fleet-cli-"));
-    const inventoryPath = join(dir, "inventory.json");
-    const manifestPath = join(dir, "manifest.json");
-    writeFileSync(
+  NodeTest.it("fails closed without a verified official Mac desktop version", async () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "ctx-fleet-cli-"));
+    const inventoryPath = NodePath.join(dir, "inventory.json");
+    const manifestPath = NodePath.join(dir, "manifest.json");
+    NodeFS.writeFileSync(
       inventoryPath,
       JSON.stringify({
         schemaVersion: 1,
@@ -317,7 +320,7 @@ describe("direct t3-ctx fleet gate", () => {
         ],
       }),
     );
-    writeFileSync(manifestPath, encodeManifest(manifest));
+    NodeFS.writeFileSync(manifestPath, encodeManifest(manifest));
     const previous = process.env.CONTEXTIVITY_T3_MAC_CLIENT_VERSION;
     delete process.env.CONTEXTIVITY_T3_MAC_CLIENT_VERSION;
     try {
@@ -329,7 +332,7 @@ describe("direct t3-ctx fleet gate", () => {
         "--manifest",
         manifestPath,
       ]);
-      assert.equal(missing, 2);
+      NodeAssert.equal(missing, 2);
       const mismatch = await main([
         "fleet",
         "update",
@@ -340,7 +343,7 @@ describe("direct t3-ctx fleet gate", () => {
         "--mac-client-version",
         "0.0.1",
       ]);
-      assert.equal(mismatch, 2);
+      NodeAssert.equal(mismatch, 2);
     } finally {
       if (previous === undefined) {
         delete process.env.CONTEXTIVITY_T3_MAC_CLIENT_VERSION;
@@ -351,16 +354,16 @@ describe("direct t3-ctx fleet gate", () => {
   });
 });
 
-describe("activate CLI command transport", () => {
-  it("invokes decoded restart and health callbacks after SSH flattening", async () => {
-    const root = mkdtempSync(join(tmpdir(), "ctx-fleet-activate-"));
-    const markers = mkdtempSync(join(tmpdir(), "ctx-fleet-markers-"));
-    const restartMarker = join(markers, "restarted");
-    const healthMarker = join(markers, "healthy");
-    const archivePath = join(root, "payload.tar.gz");
+NodeTest.describe("activate CLI command transport", () => {
+  NodeTest.it("invokes decoded restart and health callbacks after SSH flattening", async () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "ctx-fleet-activate-"));
+    const markers = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "ctx-fleet-markers-"));
+    const restartMarker = NodePath.join(markers, "restarted");
+    const healthMarker = NodePath.join(markers, "healthy");
+    const archivePath = NodePath.join(root, "payload.tar.gz");
     const body = "archive-bytes";
-    writeFileSync(archivePath, body);
-    const sha = createHash("sha256").update(body).digest("hex");
+    NodeFS.writeFileSync(archivePath, body);
+    const sha = NodeCrypto.createHash("sha256").update(body).digest("hex");
     const stagedManifest = buildCandidateManifest({
       upstreamVersion: "0.0.34-nightly.20260822.2",
       upstreamCommit: "c".repeat(40),
@@ -382,8 +385,8 @@ describe("activate CLI command transport", () => {
       archivePath,
       commands: {
         extractArchive: async (_archive, destination) => {
-          mkdirSync(join(destination, "dist"), { recursive: true });
-          writeFileSync(join(destination, "dist/bin.mjs"), "export {};\n");
+          NodeFS.mkdirSync(NodePath.join(destination, "dist"), { recursive: true });
+          NodeFS.writeFileSync(NodePath.join(destination, "dist/bin.mjs"), "export {};\n");
         },
         preflight: async () => ({ code: 0, stdout: "t3 help", stderr: "" }),
       },
@@ -409,7 +412,7 @@ describe("activate CLI command transport", () => {
     process.env[CONTEXTIVITY_HOME_ENV] = root;
     try {
       const code = await main(remote.slice(1));
-      assert.equal(code, 0);
+      NodeAssert.equal(code, 0);
     } finally {
       if (previousHome === undefined) {
         delete process.env[CONTEXTIVITY_HOME_ENV];
@@ -417,7 +420,7 @@ describe("activate CLI command transport", () => {
         process.env[CONTEXTIVITY_HOME_ENV] = previousHome;
       }
     }
-    assert.equal(readFileSync(restartMarker, "utf8"), "kickstart 'builder'; done");
-    assert.equal(readFileSync(healthMarker, "utf8"), process.env.HOME);
+    NodeAssert.equal(NodeFS.readFileSync(restartMarker, "utf8"), "kickstart 'builder'; done");
+    NodeAssert.equal(NodeFS.readFileSync(healthMarker, "utf8"), process.env.HOME);
   });
 });

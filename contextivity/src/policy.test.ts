@@ -1,8 +1,8 @@
-import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, it } from "node:test";
+import * as NodeAssert from "node:assert/strict";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
+import * as NodeTest from "node:test";
 import {
   assertNoUpstreamPackageFallback,
   containsUpstreamPackageFallback,
@@ -26,9 +26,8 @@ import {
   validatePosixShell,
   validateWorkflowYaml,
 } from "./workflow-validate.ts";
-import { existsSync } from "node:fs";
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
+const repoRoot = NodePath.join(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "../..");
 
 const manifest = buildCandidateManifest({
   upstreamVersion: "0.0.34-nightly.20260822.2",
@@ -45,37 +44,39 @@ const manifest = buildCandidateManifest({
   })),
 });
 
-describe("update and provenance policy", () => {
-  it("rejects upstream npm package fallbacks and rewrites them to t3-ctx", () => {
-    assert.equal(containsUpstreamPackageFallback("npx t3@0.0.34-nightly.20260822.2"), true);
-    assert.equal(containsUpstreamPackageFallback("npm install t3@0.0.34"), true);
-    assert.equal(containsUpstreamPackageFallback("t3-ctx update --version 0.0.34"), false);
-    assert.equal(
+NodeTest.describe("update and provenance policy", () => {
+  NodeTest.it("rejects upstream npm package fallbacks and rewrites them to t3-ctx", () => {
+    NodeAssert.equal(containsUpstreamPackageFallback("npx t3@0.0.34-nightly.20260822.2"), true);
+    NodeAssert.equal(containsUpstreamPackageFallback("npm install t3@0.0.34"), true);
+    NodeAssert.equal(containsUpstreamPackageFallback("t3-ctx update --version 0.0.34"), false);
+    NodeAssert.equal(
       replaceUpstreamUpdateCommand("npx t3@0.0.34-nightly.20260822.2", "0.0.34-nightly.20260822.2"),
       internalUpdateCommand("0.0.34-nightly.20260822.2"),
     );
-    assert.throws(() => assertNoUpstreamPackageFallback("npx t3@latest service update", "docs"));
+    NodeAssert.throws(() =>
+      assertNoUpstreamPackageFallback("npx t3@latest service update", "docs"),
+    );
   });
 
-  it("requires checksums always and GitHub OIDC attestations when authenticated", () => {
+  NodeTest.it("requires checksums always and GitHub OIDC attestations when authenticated", () => {
     const required = provenancePolicy({ githubAuthenticated: true, oidcAvailable: true });
-    assert.equal(required.checksumRequired, true);
-    assert.equal(required.privateSigningKey, "forbidden");
-    assert.equal(shouldVerifyAttestation(required), true);
-    assert.equal(
+    NodeAssert.equal(required.checksumRequired, true);
+    NodeAssert.equal(required.privateSigningKey, "forbidden");
+    NodeAssert.equal(shouldVerifyAttestation(required), true);
+    NodeAssert.equal(
       shouldVerifyAttestation(
         provenancePolicy({ githubAuthenticated: true, oidcAvailable: false }),
       ),
       true,
     );
-    assert.equal(
+    NodeAssert.equal(
       shouldVerifyAttestation(
         provenancePolicy({ githubAuthenticated: false, oidcAvailable: false }),
       ),
       false,
     );
-    assert.throws(() => assertNoPrivateSigningKey({ COSIGN_KEY: "secret" }));
-    assert.deepEqual(
+    NodeAssert.throws(() => assertNoPrivateSigningKey({ COSIGN_KEY: "secret" }));
+    NodeAssert.deepEqual(
       attestationVerifyArgs({
         artifactPath: "a.tar.gz",
         owner: "Contextivity",
@@ -85,67 +86,73 @@ describe("update and provenance policy", () => {
     );
   });
 
-  it("uses explicit token or gh, and refuses untrusted GitHub mirrors", () => {
-    assert.equal(
+  NodeTest.it("uses explicit token or gh, and refuses untrusted GitHub mirrors", () => {
+    NodeAssert.equal(
       resolveGitHubAuth({ env: { CONTEXTIVITY_GITHUB_TOKEN: "tok" } }).source,
       "explicit-token",
     );
-    assert.equal(resolveGitHubAuth({ env: {}, ghToken: "from-gh" }).source, "gh");
-    assert.throws(() =>
+    NodeAssert.equal(resolveGitHubAuth({ env: {}, ghToken: "from-gh" }).source, "gh");
+    NodeAssert.throws(() =>
       resolveGitHubEndpoints({ CONTEXTIVITY_T3_GITHUB_BASE: "https://mirror.example" }),
     );
     const trusted = resolveGitHubEndpoints({
       CONTEXTIVITY_T3_GITHUB_BASE: "https://mirror.example",
       CONTEXTIVITY_T3_TRUST_MIRROR: "1",
     });
-    assert.equal(trusted.trustedMirror, true);
+    NodeAssert.equal(trusted.trustedMirror, true);
   });
 
-  it("fails promotion closed on Mac client mismatch and missing confirmation", () => {
+  NodeTest.it("fails promotion closed on Mac client mismatch and missing confirmation", () => {
     const mismatch = promoteCandidate({
       channel: "nightly",
       manifest,
       macClientVersion: "0.0.1",
     });
-    assert.equal(mismatch.ok, false);
+    NodeAssert.equal(mismatch.ok, false);
     if (!mismatch.ok) {
-      assert.equal(mismatch.failClosed, true);
-      assert.equal(mismatch.advanceFleet, false);
+      NodeAssert.equal(mismatch.failClosed, true);
+      NodeAssert.equal(mismatch.advanceFleet, false);
     }
     const missing = promoteCandidate({
       channel: "nightly",
       manifest,
       macClientVersion: " ",
     });
-    assert.equal(missing.ok, false);
+    NodeAssert.equal(missing.ok, false);
     const ok = promoteCandidate({
       channel: "nightly",
       manifest,
       macClientVersion: "v0.0.34-nightly.20260822.2",
     });
-    assert.equal(ok.ok, true);
+    NodeAssert.equal(ok.ok, true);
   });
 });
 
-describe("workflow YAML and shell portability", () => {
-  it("keeps candidate and promote workflows thin and script-driven", () => {
+NodeTest.describe("workflow YAML and shell portability", () => {
+  NodeTest.it("keeps candidate and promote workflows thin and script-driven", () => {
     for (const relative of expectedWorkflowPaths()) {
-      const yaml = readFileSync(join(repoRoot, relative), "utf8");
+      const yaml = NodeFS.readFileSync(NodePath.join(repoRoot, relative), "utf8");
       const result = validateWorkflowYaml(relative, yaml);
-      assert.deepEqual(result.errors, [], result.errors.join("\n"));
+      NodeAssert.deepEqual(result.errors, [], result.errors.join("\n"));
     }
   });
 
-  it("uses a POSIX launcher and lists ACP tests that exist", () => {
-    const wrapper = readFileSync(join(repoRoot, "contextivity/bin/t3-ctx"), "utf8");
-    assert.deepEqual(validatePosixShell(wrapper, "t3-ctx"), []);
+  NodeTest.it("uses a POSIX launcher and lists ACP tests that exist", () => {
+    const wrapper = NodeFS.readFileSync(NodePath.join(repoRoot, "contextivity/bin/t3-ctx"), "utf8");
+    NodeAssert.deepEqual(validatePosixShell(wrapper, "t3-ctx"), []);
     for (const file of GENERIC_ACP_FOCUSED_TESTS) {
-      assert.equal(existsSync(join(repoRoot, file)), true, file);
+      NodeAssert.equal(NodeFS.existsSync(NodePath.join(repoRoot, file)), true, file);
     }
-    const inventory = readFileSync(join(repoRoot, "contextivity/inventory.example.json"), "utf8");
-    assert.equal(exampleInventoryLooksSafe(inventory), true);
-    assert.equal(decodeInventory(inventory).hosts.filter((host) => host.clientGate).length, 1);
-    const upstream = readFileSync(join(repoRoot, "scripts/lib/cli-external-packages.ts"), "utf8");
-    assert.equal(nativePrefixesMatchUpstream(upstream), true);
+    const inventory = NodeFS.readFileSync(
+      NodePath.join(repoRoot, "contextivity/inventory.example.json"),
+      "utf8",
+    );
+    NodeAssert.equal(exampleInventoryLooksSafe(inventory), true);
+    NodeAssert.equal(decodeInventory(inventory).hosts.filter((host) => host.clientGate).length, 1);
+    const upstream = NodeFS.readFileSync(
+      NodePath.join(repoRoot, "scripts/lib/cli-external-packages.ts"),
+      "utf8",
+    );
+    NodeAssert.equal(nativePrefixesMatchUpstream(upstream), true);
   });
 });

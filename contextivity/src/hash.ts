@@ -1,20 +1,20 @@
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { finished } from "node:stream/promises";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodeStreamPromises from "node:stream/promises";
 
 export function sha256Text(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
+  return NodeCrypto.createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 export function sha256Buffer(buffer: Uint8Array): string {
-  return createHash("sha256").update(buffer).digest("hex");
+  return NodeCrypto.createHash("sha256").update(buffer).digest("hex");
 }
 
 export async function sha256File(filePath: string): Promise<string> {
-  const hash = createHash("sha256");
-  const stream = createReadStream(filePath);
+  const hash = NodeCrypto.createHash("sha256");
+  const stream = NodeFS.createReadStream(filePath);
   stream.pipe(hash);
-  await finished(stream);
+  await NodeStreamPromises.finished(stream);
   return hash.digest("hex");
 }
 

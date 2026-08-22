@@ -110,7 +110,7 @@ export async function executeTwoPhase(input: {
     const result = await runHost(input.executor, command);
     if (!result.ok) {
       const rolledBack: string[] = [];
-      for (const hostName of [...activated].reverse()) {
+      for (const hostName of activated.toReversed()) {
         const rollback = input.plan.rollback.find((entry) => entry.host === hostName);
         if (!rollback) continue;
         const rollbackResult = await runHost(input.executor, rollback);
