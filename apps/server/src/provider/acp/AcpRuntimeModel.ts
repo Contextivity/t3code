@@ -563,7 +563,7 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
     case "tool_call": {
       const toolCall = parseTypedToolCallState(upd, {
         fallbackStatus: "pending",
-        notificationMeta: params._meta,
+        ...(params._meta !== undefined ? { notificationMeta: params._meta } : {}),
       });
       if (toolCall) {
         events.push({
@@ -576,7 +576,7 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
     }
     case "tool_call_update": {
       const toolCall = parseTypedToolCallState(upd, {
-        notificationMeta: params._meta,
+        ...(params._meta !== undefined ? { notificationMeta: params._meta } : {}),
       });
       if (toolCall) {
         events.push({

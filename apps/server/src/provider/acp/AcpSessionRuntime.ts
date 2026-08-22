@@ -620,8 +620,12 @@ export const make = (
       );
 
       const authMethodId = resolveAcpAuthMethodId({
-        configuredAuthMethodId: options.authMethodId,
-        advertisedAuthMethods: initializeResult.authMethods,
+        ...(options.authMethodId !== undefined
+          ? { configuredAuthMethodId: options.authMethodId }
+          : {}),
+        ...(initializeResult.authMethods !== undefined
+          ? { advertisedAuthMethods: initializeResult.authMethods }
+          : {}),
       });
       if (authMethodId !== undefined) {
         const authenticatePayload = {
@@ -636,8 +640,8 @@ export const make = (
       }
 
       const mcpServers = resolveAcpSessionMcpServers({
-        requested: options.mcpServers,
-        policy: options.mcpPolicy,
+        ...(options.mcpServers !== undefined ? { requested: options.mcpServers } : {}),
+        ...(options.mcpPolicy !== undefined ? { policy: options.mcpPolicy } : {}),
         initializeResult,
       });
 
