@@ -104,7 +104,7 @@ function applyRecord(
     state.children.set(record.agentId, child);
   }
 
-  const terminal = isAcpSubagentTerminalState(record.state) || change === "terminal";
+  const terminal = recordCompletes(record, change);
   if (child.terminalEmitted && !isNewEpoch) {
     if (change === "updated") {
       emitProgressIfPresent(events, record);
@@ -270,6 +270,14 @@ function linkage(record: AcpSubagentRecord): {
     ...(record.parentAgentId ? { parentAgentId: record.parentAgentId } : {}),
     ...(agentPath ? { agentPath } : {}),
   };
+}
+
+function recordCompletes(
+  record: AcpSubagentRecord,
+  change?: AcpSubagentEventPayload["change"],
+): boolean {
+  if (isAcpSubagentTerminalState(record.state)) return true;
+  return change === "terminal" && record.terminal !== undefined;
 }
 
 function statusFromLifecycle(state: AcpSubagentLifecycleState): RuntimeTaskStatus | undefined {

@@ -348,6 +348,39 @@ describe("ContextivityAcpSubagentMapper", () => {
     expect(respawn.events[0]).toMatchObject({ type: "task.started", payload: { title: "Scout" } });
   });
 
+  it("does not complete when change is terminal without a terminal state or object", () => {
+    const { events } = apply(
+      event({
+        sequence: 1,
+        kind: "delta",
+        change: "terminal",
+        records: [record({ state: "running" })],
+      }),
+    );
+    expect(events.some((entry) => entry.type === "task.completed")).toBe(false);
+    expect(events.some((entry) => entry.type === "task.started")).toBe(true);
+  });
+
+  it("completes a terminal change when the record carries a valid terminal object", () => {
+    const { events } = apply(
+      event({
+        sequence: 1,
+        kind: "delta",
+        change: "terminal",
+        records: [
+          record({
+            state: "running",
+            terminal: { kind: "completed", endedAt: 2, summary: "done via object" },
+          }),
+        ],
+      }),
+    );
+    expect(events).toMatchObject([
+      { type: "task.started" },
+      { type: "task.completed", payload: { status: "completed", summary: "done via object" } },
+    ]);
+  });
+
   it("snapshot cancels missing non-terminal children", () => {
     let state = emptyContextivitySubagentMapperState();
     const two = apply(

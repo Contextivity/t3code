@@ -210,9 +210,18 @@ describe("ContextivityAcpExtension", () => {
       sessionId: "s",
       sequence: 1,
       kind: "snapshot",
-      records: Array.from({ length: 68 }, (_, index) => record({ agentId: `a${index}` })),
+      records: Array.from({ length: 64 }, (_, index) => record({ agentId: `a${index}` })),
     });
     expect(snapshot?.records).toHaveLength(64);
+    expect(
+      parseAcpSubagentEvent({
+        version: 1,
+        sessionId: "s",
+        sequence: 1,
+        kind: "snapshot",
+        records: Array.from({ length: 65 }, (_, index) => record({ agentId: `a${index}` })),
+      }),
+    ).toBeUndefined();
 
     const delta = parseAcpSubagentEvent({
       version: 1,

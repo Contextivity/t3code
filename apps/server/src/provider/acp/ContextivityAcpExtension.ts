@@ -174,6 +174,11 @@ export function parseAcpSubagentEvent(value: unknown): AcpSubagentEventPayload |
       return undefined;
     }
     if (!Array.isArray(value.records)) return undefined;
+    // Snapshots are authoritative. Truncating would drop children, and the mapper
+    // would then cancel the missing ones. Reject the whole envelope instead.
+    if (value.kind === "snapshot" && value.records.length > MAX_SNAPSHOT_RECORDS) {
+      return undefined;
+    }
     const limit = value.kind === "snapshot" ? MAX_SNAPSHOT_RECORDS : MAX_DELTA_RECORDS;
     const records: AcpSubagentRecord[] = [];
     for (const item of value.records) {
