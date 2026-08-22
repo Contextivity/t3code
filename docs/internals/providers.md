@@ -7,15 +7,16 @@ orchestration layer does not know which one is behind a thread.
 
 ## Built-in drivers
 
-[`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with five entries:
+[`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with six entries:
 
-| Driver kind   | Driver source                           |
-| ------------- | --------------------------------------- |
-| `codex`       | [`Drivers/CodexDriver.ts`][codex]       |
-| `claudeAgent` | [`Drivers/ClaudeDriver.ts`][claude]     |
-| `cursor`      | [`Drivers/CursorDriver.ts`][cursor]     |
-| `grok`        | [`Drivers/GrokDriver.ts`][grok]         |
-| `opencode`    | [`Drivers/OpenCodeDriver.ts`][opencode] |
+| Driver kind   | Driver source                                 |
+| ------------- | --------------------------------------------- |
+| `codex`       | [`Drivers/CodexDriver.ts`][codex]             |
+| `claudeAgent` | [`Drivers/ClaudeDriver.ts`][claude]           |
+| `cursor`      | [`Drivers/CursorDriver.ts`][cursor]           |
+| `grok`        | [`Drivers/GrokDriver.ts`][grok]               |
+| `opencode`    | [`Drivers/OpenCodeDriver.ts`][opencode]       |
+| `acpRegistry` | [`Drivers/AcpRegistryDriver.ts`][acpregistry] |
 
 Each driver declares its `driverKind`, a `configSchema`, and a `create` function that builds an
 adapter in a child scope. Adapter implementations live beside them in
@@ -38,6 +39,26 @@ directory to route session and turn operations for a thread, so callers name a t
 
 Adding a driver means writing the driver plus adapter and adding it to `BUILT_IN_DRIVERS`. No
 orchestration, contract, or client change is required for the common case.
+
+### ACP Registry
+
+`acpRegistry` is a standards-only ACP driver for user-configured executables (Contextivity:
+`contextivity-agent --mode acp`). It reuses [`AcpSessionRuntime.ts`][acpruntime] and does not speak
+Grok's x.ai extensions. Settings live on the instance (`binaryPath`, `launchArgs`, `authMethodId`,
+`attachMcpWhenSupported`); there is no legacy `providers.acpRegistry` blob, so hydration does not
+synthesize a dummy instance.
+
+Health is ACP initialize plus session create. `--version` is optional and is not the sole failure
+reason. MCP is attached only when the switch is on and the initialized agent advertises HTTP MCP
+(`mcpPolicy: "auto"`; `"never"` when the switch is off). Grok and Cursor keep `mcpPolicy: "always"`.
+
+ACP tool `_meta` is preserved on canonical tool data so namespaced subagent metadata stays
+observable as tool activity. When the agent also advertises
+`_meta.contextivity.subagentEvents.version = 1`, ACP Registry maps
+`_contextivity/subagent_event` onto canonical `task.*` events for the Agents panel
+(see [acp-subagent-events.md](./acp-subagent-events.md)). Agents without that capability
+keep tool-activity-only behavior. ACP `available_commands_update` has no command-palette
+surface.
 
 ## How provider work is requested
 
@@ -81,6 +102,8 @@ when a request opens (approval) or user input is requested, via
 [cursor]: ../../apps/server/src/provider/Drivers/CursorDriver.ts
 [grok]: ../../apps/server/src/provider/Drivers/GrokDriver.ts
 [opencode]: ../../apps/server/src/provider/Drivers/OpenCodeDriver.ts
+[acpregistry]: ../../apps/server/src/provider/Drivers/AcpRegistryDriver.ts
+[acpruntime]: ../../apps/server/src/provider/acp/AcpSessionRuntime.ts
 [adapter]: ../../apps/server/src/provider/Services/ProviderAdapter.ts
 [instances]: ../../apps/server/src/provider/Services/ProviderInstanceRegistry.ts
 [registry]: ../../apps/server/src/provider/Services/ProviderAdapterRegistry.ts

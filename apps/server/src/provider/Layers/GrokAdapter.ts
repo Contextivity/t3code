@@ -800,6 +800,10 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   return;
                 }
 
+                if (event._tag === "ContextivitySubagentEvent") {
+                  return;
+                }
+
                 const notificationTurnId = resolveNotificationTurnId(ctx);
                 if (
                   notificationTurnId === undefined ||

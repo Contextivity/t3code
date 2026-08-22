@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "channel": "nightly",
+  "hosts": [
+    {
+      "name": "workstation",
+      "via": "local",
+      "clientGate": true,
+      "restartCommand": "launchctl kickstart -k gui/$UID/com.example.contextivity-t3",
+      "healthCommand": "curl -sf --max-time 5 http://127.0.0.1:3000/health"
+    },
+    {
+      "name": "builder",
+      "via": "ssh",
+      "sshAlias": "builder",
+      "restartCommand": "launchctl kickstart -k gui/$UID/com.example.contextivity-t3",
+      "healthCommand": "curl -sf --max-time 5 http://127.0.0.1:3000/health"
+    },
+    {
+      "name": "lab",
+      "via": "ssh",
+      "sshAlias": "lab",
+      "restartCommand": "systemctl --user restart contextivity-t3",
+      "healthCommand": "curl -sf --max-time 5 http://127.0.0.1:3000/health"
+    }
+  ]
+}

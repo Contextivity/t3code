@@ -467,6 +467,68 @@ export const GrokSettings = makeProviderSettingsSchema(
 );
 export type GrokSettings = typeof GrokSettings.Type;
 
+export const AcpRegistrySettings = makeProviderSettingsSchema(
+  {
+    // Opt-in only. ACP Registry is never synthesized from the legacy
+    // `providers` blob, so an empty install does not probe a dummy binary.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the ACP agent executable.",
+        providerSettingsForm: {
+          placeholder: "contextivity-agent",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    launchArgs: Schema.String.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Launch arguments",
+        description: "CLI arguments passed to the agent. For Contextivity, use --mode acp.",
+        providerSettingsForm: {
+          placeholder: "--mode acp",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    authMethodId: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Auth method ID",
+        description:
+          "ACP authenticate method id. Leave blank to use the first advertised method, or skip authentication if the agent advertises none.",
+        providerSettingsForm: {
+          placeholder: "Optional",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    attachMcpWhenSupported: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.annotateKey({
+        title: "Attach T3 MCP when supported",
+        description:
+          "Offer T3's HTTP MCP server only when the agent advertises compatible HTTP MCP. Turn this off to never send MCP servers.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath", "launchArgs", "authMethodId", "attachMcpWhenSupported"],
+  },
+);
+export type AcpRegistrySettings = typeof AcpRegistrySettings.Type;
+
 export const OpenCodeSettings = makeProviderSettingsSchema(
   {
     // Off by default (like Cursor and Grok): the binding is not yet stable
@@ -697,6 +759,11 @@ export const providerInstanceConfigEnabledFlag = (config: unknown): boolean | un
  * the single source of truth. Unknown (fork) drivers default to enabled.
  */
 export const defaultEnabledForDriver = (driver: ProviderDriverKind): boolean => {
+  // ACP Registry is instance-only and is not synthesized from the legacy
+  // `providers` blob, so it cannot inherit an enabled default from there.
+  if (driver === "acpRegistry") {
+    return false;
+  }
   const legacyDefaults = DEFAULT_SERVER_SETTINGS.providers as Record<
     string,
     { readonly enabled?: boolean } | undefined

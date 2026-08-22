@@ -11,6 +11,7 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
+- [Contextivity downstream](#contextivity-downstream)
 
 ## Concepts
 
@@ -94,7 +95,11 @@ The live backend agent implementation and its event stream. The main service is 
 
 #### Provider
 
-The backend agent runtime that actually performs work. Five drivers ship built in: Codex, Claude, Cursor, Grok, and OpenCode. See [ProviderService.ts][14], [ProviderAdapter.ts][15], and [CodexAdapter.ts][17] as a representative adapter.
+The backend agent runtime that actually performs work. Six drivers ship built in: Codex, Claude, Cursor, Grok, OpenCode, and ACP Registry. ACP Registry is a generic ACP executable adapter (for example Contextivity) and is not synthesized from the legacy providers blob. See [ProviderService.ts][14], [ProviderAdapter.ts][15], and [CodexAdapter.ts][17] as a representative adapter.
+
+#### ACP sub-agent events
+
+A namespaced ACP extension (`_contextivity/subagent_event`) that any ACP agent may advertise via `_meta.contextivity.subagentEvents.version = 1`. T3's ACP Registry client advertises the same capability and, when the agent matches, maps bounded child records onto canonical `task.*` events for the Agents panel. See [acp-subagent-events.md][25] and [AcpRegistryAdapter.ts][26].
 
 #### Session
 
@@ -140,6 +145,18 @@ The patch difference between two checkpoints. Query logic lives in [CheckpointDi
 
 The file patch and changed-file summary for one turn. It is usually computed in [CheckpointDiffQuery.ts][20], represented in [the contracts][1], and recorded into thread state by [projector.ts][4].
 
+### Contextivity downstream
+
+Fork-only distribution on `Contextivity/t3code`. It tracks official `pingdotgg/t3code` nightly tags and publishes self-contained server archives. See [contextivity-downstream.md][27].
+
+#### Dual identity
+
+`upstreamVersion` is the official T3 nightly and is the protocol-visible `serverVersion`. `contextivityRevision` is the Contextivity patch SHA used for install paths and rollback. Official clients must keep seeing the upstream nightly.
+
+#### Candidate / nightly / stable pointers
+
+A candidate is an immutable attested build. The `nightly` fleet pointer moves only after a manual promote that confirms the official Mac desktop version. `stable` is the known-good rollback pointer. Hosts install with `t3-ctx`, never `npx t3@<version>`.
+
 ## Practical Shortcuts
 
 - If you see `requested`, think "intent recorded".
@@ -179,3 +196,6 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
+[25]: ./acp-subagent-events.md
+[26]: ../../apps/server/src/provider/Layers/AcpRegistryAdapter.ts
+[27]: ../operations/contextivity-downstream.md

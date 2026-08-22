@@ -23,6 +23,10 @@ import {
 } from "./pinnedRuntime.ts";
 import { decodeServicePreflightResult } from "./servicePreflight.ts";
 import * as ServiceLauncherClient from "./serviceLauncherClient.ts";
+import {
+  isContextivityDistributionFromEnv,
+  UPSTREAM_NPM_UPDATE_REFUSAL,
+} from "../distribution/contextivityDistribution.ts";
 import { isExactServiceVersion, SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 
 const PREFLIGHT_TIMEOUT = Duration.seconds(30);
@@ -30,7 +34,9 @@ const PREFLIGHT_TIMEOUT = Duration.seconds(30);
 export function resolveServerSelfUpdateCapability(input: {
   readonly desktopManaged: boolean;
   readonly launcherManaged: boolean;
+  readonly contextivityDistribution?: boolean;
 }): ServerSelfUpdateCapability | null {
+  if (input.contextivityDistribution) return null;
   if (input.desktopManaged) return "desktop-managed" as const;
   return input.launcherManaged ? ("boot-service" as const) : null;
 }
@@ -45,7 +51,9 @@ export class ServerSelfUpdate extends Context.Service<
   }
 >()("t3/cloud/selfUpdate/ServerSelfUpdate") {}
 
-export const make = Effect.fn("cloud.server_self_update.make")(function* () {
+export const make = Effect.fn("cloud.server_self_update.make")(function* (
+  options: { readonly env?: NodeJS.ProcessEnv } = {},
+) {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
   const runner = yield* ProcessRunner.ProcessRunner;
@@ -53,9 +61,14 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
   const path = yield* Path.Path;
   const execPath = yield* HostProcessExecutablePath;
   const inFlight = yield* Ref.make(false);
+  const env = options.env ?? process.env;
+  const contextivityDistribution = isContextivityDistributionFromEnv(env);
 
-  const capability: ServerSelfUpdateCapability | null =
-    serverConfig.mode === "desktop" ? "desktop-managed" : launcher.managed ? "boot-service" : null;
+  const capability: ServerSelfUpdateCapability | null = resolveServerSelfUpdateCapability({
+    desktopManaged: serverConfig.mode === "desktop",
+    launcherManaged: launcher.managed,
+    contextivityDistribution,
+  });
   const failWith = (reason: string, cause?: unknown) =>
     cause === undefined
       ? new ServerSelfUpdateError({ reason })
@@ -64,6 +77,9 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
   const update: ServerSelfUpdate["Service"]["update"] = Effect.fn(
     "cloud.server_self_update.update",
   )(function* (input, reportProgress = () => Effect.void) {
+    if (contextivityDistribution) {
+      return yield* failWith(UPSTREAM_NPM_UPDATE_REFUSAL);
+    }
     if (capability === "desktop-managed") {
       return yield* failWith(
         "This server is managed by the T3 Code desktop app on its machine; update the desktop app to update it.",

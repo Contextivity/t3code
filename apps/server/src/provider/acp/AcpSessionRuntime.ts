@@ -12,6 +12,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
@@ -20,6 +21,13 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+
+import {
+  ACP_SUBAGENT_EVENT_METHOD,
+  parseAcpSubagentEvent,
+  summarizeAcpSubagentEvent,
+  type AcpSubagentEventPayload,
+} from "./ContextivityAcpExtension.ts";
 
 import {
   collectSessionConfigOptionValues,
@@ -45,7 +53,16 @@ export interface AcpSessionEventStreamBarrier {
   readonly acknowledge: Deferred.Deferred<void>;
 }
 
-export type AcpSessionRuntimeEvent = AcpParsedSessionEvent | AcpSessionEventStreamBarrier;
+export type AcpContextivitySubagentRuntimeEvent = {
+  readonly _tag: "ContextivitySubagentEvent";
+  readonly payload: AcpSubagentEventPayload;
+  readonly rawPayload: unknown;
+};
+
+export type AcpSessionRuntimeEvent =
+  | AcpParsedSessionEvent
+  | AcpSessionEventStreamBarrier
+  | AcpContextivitySubagentRuntimeEvent;
 
 const defaultSessionLoadTimeout = Duration.seconds(90);
 const defaultSessionLoadReplayIdleGap = Duration.seconds(2);
@@ -56,6 +73,8 @@ export interface AcpSpawnInput {
   readonly cwd?: string;
   readonly env?: NodeJS.ProcessEnv;
 }
+
+export type AcpMcpPolicy = "always" | "auto" | "never";
 
 export interface AcpSessionRuntimeOptions {
   readonly spawn: AcpSpawnInput;
@@ -68,14 +87,56 @@ export interface AcpSessionRuntimeOptions {
     readonly name: string;
     readonly version: string;
   };
-  readonly authMethodId: string;
+  /**
+   * ACP `authenticate` method id. When omitted or blank, the runtime uses the
+   * first advertised `authMethods` entry from `initialize`, or skips
+   * authentication when the agent advertises none.
+   */
+  readonly authMethodId?: string;
   readonly mcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  /**
+   * How to treat `mcpServers` after `initialize`.
+   * - `always` (default): pass the requested servers, matching Grok/Cursor.
+   * - `auto`: pass them only when the agent advertises HTTP MCP.
+   * - `never`: always send an empty array.
+   */
+  readonly mcpPolicy?: AcpMcpPolicy;
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
     readonly logOutgoing?: boolean;
     readonly logger?: (event: EffectAcpProtocol.AcpProtocolLogEvent) => Effect.Effect<void, never>;
   };
+}
+
+export function resolveAcpAuthMethodId(input: {
+  readonly configuredAuthMethodId?: string;
+  readonly advertisedAuthMethods?: ReadonlyArray<{ readonly id: string }> | null;
+}): string | undefined {
+  const configured = input.configuredAuthMethodId?.trim();
+  if (configured) {
+    return configured;
+  }
+  const firstAdvertised = input.advertisedAuthMethods?.find(
+    (method) => method.id.trim().length > 0,
+  );
+  return firstAdvertised?.id.trim() || undefined;
+}
+
+export function resolveAcpSessionMcpServers(input: {
+  readonly requested?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  readonly policy?: AcpMcpPolicy;
+  readonly initializeResult: EffectAcpSchema.InitializeResponse;
+}): ReadonlyArray<EffectAcpSchema.McpServer> {
+  const requested = input.requested ?? [];
+  const policy = input.policy ?? "always";
+  if (policy === "never" || requested.length === 0) {
+    return [];
+  }
+  if (policy === "always") {
+    return requested;
+  }
+  return input.initializeResult.agentCapabilities?.mcpCapabilities?.http === true ? requested : [];
 }
 
 export interface AcpSessionRequestLogEvent {
@@ -403,6 +464,23 @@ export const make = (
         });
       }),
     );
+    yield* acp.handleExtNotification(ACP_SUBAGENT_EVENT_METHOD, Schema.Unknown, (params) =>
+      Effect.gen(function* () {
+        const parsed = parseAcpSubagentEvent(params);
+        if (!parsed) {
+          yield* Effect.logDebug("Ignored malformed ACP subagent event.", {
+            method: ACP_SUBAGENT_EVENT_METHOD,
+            payload: summarizeAcpSubagentEvent(params),
+          });
+          return;
+        }
+        yield* Queue.offer(eventQueue, {
+          _tag: "ContextivitySubagentEvent",
+          payload: parsed,
+          rawPayload: params,
+        });
+      }).pipe(Effect.catchCause(() => Effect.void)),
+    );
     const initializeClientCapabilities = {
       fs: {
         readTextFile: false,
@@ -541,15 +619,31 @@ export const make = (
         acp.agent.initialize(initializePayload),
       );
 
-      const authenticatePayload = {
-        methodId: options.authMethodId,
-      } satisfies EffectAcpSchema.AuthenticateRequest;
+      const authMethodId = resolveAcpAuthMethodId({
+        ...(options.authMethodId !== undefined
+          ? { configuredAuthMethodId: options.authMethodId }
+          : {}),
+        ...(initializeResult.authMethods !== undefined
+          ? { advertisedAuthMethods: initializeResult.authMethods }
+          : {}),
+      });
+      if (authMethodId !== undefined) {
+        const authenticatePayload = {
+          methodId: authMethodId,
+        } satisfies EffectAcpSchema.AuthenticateRequest;
 
-      yield* runLoggedRequest(
-        "authenticate",
-        authenticatePayload,
-        acp.agent.authenticate(authenticatePayload),
-      );
+        yield* runLoggedRequest(
+          "authenticate",
+          authenticatePayload,
+          acp.agent.authenticate(authenticatePayload),
+        );
+      }
+
+      const mcpServers = resolveAcpSessionMcpServers({
+        ...(options.mcpServers !== undefined ? { requested: options.mcpServers } : {}),
+        ...(options.mcpPolicy !== undefined ? { policy: options.mcpPolicy } : {}),
+        initializeResult,
+      });
 
       let sessionId: string;
       let sessionSetupResult:
@@ -560,7 +654,7 @@ export const make = (
         const loadPayload = {
           sessionId: options.resumeSessionId,
           cwd: options.cwd,
-          mcpServers: options.mcpServers ?? [],
+          mcpServers,
         } satisfies EffectAcpSchema.LoadSessionRequest;
         const sessionLoadTimeout = Duration.fromInputUnsafe(
           options.sessionLoadTimeout ?? defaultSessionLoadTimeout,
@@ -633,7 +727,7 @@ export const make = (
       } else {
         const createPayload = {
           cwd: options.cwd,
-          mcpServers: options.mcpServers ?? [],
+          mcpServers,
         } satisfies EffectAcpSchema.NewSessionRequest;
         const created = yield* runLoggedRequest(
           "session/new",

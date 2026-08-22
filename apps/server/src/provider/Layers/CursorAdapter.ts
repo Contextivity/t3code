@@ -791,6 +791,8 @@ export function makeCursorAdapter(
                     return;
                   case "ModeChanged":
                     return;
+                  case "ContextivitySubagentEvent":
+                    return;
                   case "AssistantItemStarted":
                     yield* offerRuntimeEvent(
                       makeAcpAssistantItemEvent({

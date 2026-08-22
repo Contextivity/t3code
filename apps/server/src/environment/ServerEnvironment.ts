@@ -12,6 +12,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { readAgentActivityPublishingActive } from "../cloud/config.ts";
 import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
+import { isContextivityDistributionFromEnv } from "../distribution/contextivityDistribution.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -133,6 +134,7 @@ export const make = Effect.gen(function* () {
   const serverSelfUpdate = resolveServerSelfUpdateCapability({
     desktopManaged: serverConfig.mode === "desktop",
     launcherManaged: launcher.managed,
+    contextivityDistribution: isContextivityDistributionFromEnv(process.env),
   });
 
   const descriptor: ExecutionEnvironmentDescriptor = {

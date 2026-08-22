@@ -1,0 +1,81 @@
+name: Contextivity promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Fleet pointer to advance
+        required: true
+        type: choice
+        options:
+          - nightly
+          - stable
+      version:
+        description: Exact candidate identity (upstreamVersion-ctx.revision)
+        required: true
+        type: string
+      macClientVersion:
+        description: Installed official Mac desktop version (must equal manifest upstreamVersion)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: contextivity-promote
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Manual fleet promotion
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: package.json
+
+      - name: Download matching candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir -p contextivity-dist
+          gh release download "contextivity-candidate/${{ github.event.inputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --dir contextivity-dist \
+            --pattern "manifest.json"
+
+      - name: Exact-version Mac client gate
+        run: |
+          set -eu
+          node --experimental-strip-types contextivity/src/cli.ts promote \
+            --channel "${{ github.event.inputs.channel }}" \
+            --manifest contextivity-dist/manifest.json \
+            --version "${{ github.event.inputs.version }}" \
+            --mac-client-version "${{ github.event.inputs.macClientVersion }}" \
+            > contextivity-dist/pointer.json
+
+      - name: Publish pointer without touching the official desktop app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          channel="${{ github.event.inputs.channel }}"
+          tag="contextivity-${channel}"
+          notes="Pointer only. Install with t3-ctx updater update --channel ${channel}. Do not use the public npm t3 package."
+          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release delete "$tag" --repo "${{ github.repository }}" --yes --cleanup-tag
+          fi
+          gh release create "$tag" contextivity-dist/pointer.json contextivity-dist/manifest.json \
+            --repo "${{ github.repository }}" \
+            --title "Contextivity ${channel} pointer" \
+            --notes "$notes" \
+            --prerelease \
+            --latest=false

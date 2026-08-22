@@ -1,0 +1,16 @@
+{
+  "name": "@contextivity/t3-downstream",
+  "private": true,
+  "description": "Contextivity downstream T3 nightly distribution. Isolated from the generic ACP patch stack.",
+  "bin": {
+    "t3-ctx": "./bin/t3-ctx"
+  },
+  "type": "module",
+  "scripts": {
+    "test": "node --test --experimental-strip-types src/*.test.ts",
+    "cli": "node --experimental-strip-types src/cli.ts"
+  },
+  "engines": {
+    "node": "^24.13.1"
+  }
+}

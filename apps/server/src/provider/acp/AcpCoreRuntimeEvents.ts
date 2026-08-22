@@ -12,6 +12,8 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 
+import type { ContextivityMappedTaskEvent } from "./ContextivityAcpSubagentMapper.ts";
+
 import type { AcpPermissionRequest, AcpPlanUpdate, AcpToolCallState } from "./AcpRuntimeModel.ts";
 
 type AcpAdapterRawSource = Extract<
@@ -220,6 +222,7 @@ export function makeAcpContentDeltaEvent(input: {
   readonly turnId: TurnId | undefined;
   readonly itemId?: string;
   readonly text: string;
+  readonly streamKind?: "assistant_text" | "reasoning_text";
   readonly rawPayload: unknown;
 }): ProviderRuntimeEvent {
   return {
@@ -230,7 +233,7 @@ export function makeAcpContentDeltaEvent(input: {
     turnId: input.turnId,
     ...(input.itemId ? { itemId: RuntimeItemId.make(input.itemId) } : {}),
     payload: {
-      streamKind: "assistant_text",
+      streamKind: input.streamKind ?? streamKindFromRawPayload(input.rawPayload),
       delta: input.text,
     },
     raw: {
@@ -239,4 +242,50 @@ export function makeAcpContentDeltaEvent(input: {
       payload: input.rawPayload,
     },
   };
+}
+
+export function makeAcpTaskEvent(input: {
+  readonly stamp: AcpEventStamp;
+  readonly provider: ProviderDriverKind;
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId | undefined;
+  readonly event: ContextivityMappedTaskEvent;
+  readonly source: AcpAdapterRawSource;
+  readonly method: string;
+  readonly rawPayload: unknown;
+}): ProviderRuntimeEvent {
+  const base = {
+    ...input.stamp,
+    provider: input.provider,
+    threadId: input.threadId,
+    ...(input.turnId ? { turnId: input.turnId } : {}),
+    raw: {
+      source: input.source,
+      method: input.method,
+      payload: input.rawPayload,
+    },
+  };
+  switch (input.event.type) {
+    case "task.started":
+      return { ...base, type: "task.started", payload: input.event.payload };
+    case "task.progress":
+      return { ...base, type: "task.progress", payload: input.event.payload };
+    case "task.updated":
+      return { ...base, type: "task.updated", payload: input.event.payload };
+    case "task.completed":
+      return { ...base, type: "task.completed", payload: input.event.payload };
+  }
+}
+
+function streamKindFromRawPayload(rawPayload: unknown): "assistant_text" | "reasoning_text" {
+  if (typeof rawPayload !== "object" || rawPayload === null) {
+    return "assistant_text";
+  }
+  const update = "update" in rawPayload ? rawPayload.update : undefined;
+  if (typeof update !== "object" || update === null) {
+    return "assistant_text";
+  }
+  return "sessionUpdate" in update && update.sessionUpdate === "agent_thought_chunk"
+    ? "reasoning_text"
+    : "assistant_text";
 }
