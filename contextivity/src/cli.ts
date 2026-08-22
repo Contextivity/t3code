@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { flagBool, flagString, parseArgs, usage } from "./args.ts";
+import { hostCommandFromFlags } from "./host-command.ts";
 import {
   CANDIDATE_SERVER_CHECKS,
   DOWNSTREAM_GITHUB,
@@ -82,8 +83,8 @@ function requireFlag(flags: ReturnType<typeof parseArgs>["flags"], name: string)
 function activateVerifyCommands(
   flags: ReturnType<typeof parseArgs>["flags"],
 ): Parameters<typeof activateAndVerify>[0]["commands"] {
-  const restartCommand = flagString(flags, "restart-command");
-  const healthCommand = flagString(flags, "health-command");
+  const restartCommand = hostCommandFromFlags(flags, "restart");
+  const healthCommand = hostCommandFromFlags(flags, "health");
   return {
     extractArchive: async () => undefined,
     preflight: async () => ({ code: 0, stdout: "", stderr: "" }),

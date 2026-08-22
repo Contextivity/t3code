@@ -2,6 +2,11 @@ import type { CandidateManifest } from "./manifest.ts";
 import { promoteCandidate } from "./promote.ts";
 import type { Inventory, InventoryHost } from "./inventory.ts";
 import { formatInstallId } from "./identity.ts";
+import {
+  encodeHostCommandArg,
+  HEALTH_COMMAND_B64_FLAG,
+  RESTART_COMMAND_B64_FLAG,
+} from "./host-command.ts";
 
 export type FleetPhase = "resolve" | "stage" | "activate" | "rollback";
 
@@ -41,10 +46,10 @@ export function hostArgv(host: InventoryHost, args: readonly string[]): HostComm
 export function updaterActivateArgs(host: InventoryHost, installId: string): readonly string[] {
   const args = ["updater", "activate", "--version", installId];
   if (host.restartCommand) {
-    args.push("--restart-command", host.restartCommand);
+    args.push(`--${RESTART_COMMAND_B64_FLAG}`, encodeHostCommandArg(host.restartCommand));
   }
   if (host.healthCommand) {
-    args.push("--health-command", host.healthCommand);
+    args.push(`--${HEALTH_COMMAND_B64_FLAG}`, encodeHostCommandArg(host.healthCommand));
   }
   return args;
 }

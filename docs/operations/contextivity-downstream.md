@@ -119,12 +119,14 @@ t3-ctx fleet update --inventory ~/.config/contextivity/t3-inventory.json \
 ```
 
 The coordinator resolves **one** manifest, stages every host, then activates. Activation runs each
-host's configured `restartCommand` and `healthCommand` (bounded) after the symlink switch. If
-staging fails, none activate. If activate, restart, or health fails, every host that switched is
-rolled back. Direct `t3-ctx fleet` fails closed without a verified official Mac desktop version
-(`--mac-client-version` or `CONTEXTIVITY_T3_MAC_CLIENT_VERSION`) that exactly matches
-`manifest.upstreamVersion`. Inventory must name exactly one `clientGate` host — the Mac that holds
-the official desktop app.
+host's configured `restartCommand` and `healthCommand` (bounded) after the symlink switch. Fleet
+sends those strings as base64url argv tokens (`--restart-command-b64`, `--health-command-b64`) so
+SSH concatenation cannot split on spaces or metacharacters; the remote `t3-ctx` decodes the original
+string and runs it with `sh -c`. If staging fails, none activate. If activate, restart, or health
+fails, every host that switched is rolled back. Direct `t3-ctx fleet` fails closed without a
+verified official Mac desktop version (`--mac-client-version` or
+`CONTEXTIVITY_T3_MAC_CLIENT_VERSION`) that exactly matches `manifest.upstreamVersion`. Inventory
+must name exactly one `clientGate` host — the Mac that holds the official desktop app.
 
 ## Host updater
 
