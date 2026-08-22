@@ -322,6 +322,7 @@ describe("AcpRuntimeModel", () => {
       {
         _tag: "ContentDelta",
         text: "hello from acp",
+        streamKind: "assistant_text",
         rawPayload: {
           sessionId: "session-1",
           update: {
@@ -334,6 +335,61 @@ describe("AcpRuntimeModel", () => {
         },
       },
     ]);
+  });
+
+  it("maps agent thought chunks to reasoning content deltas", () => {
+    const thoughtResult = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: {
+          type: "text",
+          text: "considering the next step",
+        },
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(thoughtResult.events).toEqual([
+      {
+        _tag: "ContentDelta",
+        text: "considering the next step",
+        streamKind: "reasoning_text",
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: {
+              type: "text",
+              text: "considering the next step",
+            },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("preserves namespaced tool-call metadata on canonical tool data", () => {
+    const created = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-subagent-1",
+        title: "Subagent",
+        kind: "other",
+        status: "pending",
+        _meta: {
+          "contextivity.dev/subagent": { id: "child-1" },
+        },
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(created.events[0]?._tag).toBe("ToolCallUpdated");
+    const event = created.events[0];
+    if (event?._tag === "ToolCallUpdated") {
+      expect(event.toolCall.data._meta).toEqual({
+        "contextivity.dev/subagent": { id: "child-1" },
+      });
+    }
   });
 
   it("keeps permission request parsing compatible with loose extension payloads", () => {

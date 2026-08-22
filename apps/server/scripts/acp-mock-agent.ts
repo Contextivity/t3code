@@ -36,6 +36,19 @@ const emitStaleXAiPromptCompleteBeforeSecondHang =
 const emitOverlappingXAiPromptCompleteOutOfOrder =
   process.env.T3_ACP_EMIT_OVERLAPPING_XAI_PROMPT_COMPLETE_OUT_OF_ORDER === "1";
 const failPrompt = process.env.T3_ACP_FAIL_PROMPT === "1";
+const rejectMcpServers = process.env.T3_ACP_REJECT_MCP === "1";
+const advertiseHttpMcp = process.env.T3_ACP_ADVERTISE_HTTP_MCP === "1";
+const emitThought = process.env.T3_ACP_EMIT_THOUGHT === "1";
+const emitToolMeta = process.env.T3_ACP_EMIT_TOOL_META === "1";
+const authMethodsEnv = process.env.T3_ACP_AUTH_METHODS;
+const advertisedAuthMethods =
+  authMethodsEnv === undefined
+    ? undefined
+    : authMethodsEnv
+        .split(",")
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0)
+        .map((id) => ({ id, name: id }));
 const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
@@ -302,19 +315,34 @@ const program = Effect.gen(function* () {
         request.clientCapabilities?._meta?.parameterizedModelPicker === true;
       return {
         protocolVersion: 1,
-        agentCapabilities: { loadSession: true },
+        agentCapabilities: {
+          loadSession: true,
+          ...(advertiseHttpMcp ? { mcpCapabilities: { http: true } } : {}),
+        },
+        ...(advertisedAuthMethods ? { authMethods: advertisedAuthMethods } : {}),
       };
     }),
   );
 
   yield* agent.handleAuthenticate(() => Effect.succeed({}));
 
-  yield* agent.handleCreateSession(() =>
-    Effect.succeed({
-      sessionId,
-      modes: modeState(),
-      models: modelState(),
-      configOptions: configOptions(),
+  yield* agent.handleCreateSession((request) =>
+    Effect.gen(function* () {
+      if (rejectMcpServers && Array.isArray(request.mcpServers) && request.mcpServers.length > 0) {
+        return yield* AcpError.AcpRequestError.invalidParams(
+          "Mock agent does not support mcpServers",
+          {
+            method: "session/new",
+            params: request,
+          },
+        );
+      }
+      return {
+        sessionId,
+        modes: modeState(),
+        models: modelState(),
+        configOptions: configOptions(),
+      };
     }),
   );
 
@@ -644,6 +672,13 @@ const program = Effect.gen(function* () {
             rawInput: {
               command: ["cat", "server/package.json"],
             },
+            ...(emitToolMeta
+              ? {
+                  _meta: {
+                    "contextivity.dev/subagent": { id: "child-1", title: "Subagent" },
+                  },
+                }
+              : {}),
           },
         });
 
@@ -864,6 +899,16 @@ const program = Effect.gen(function* () {
           ],
         },
       });
+
+      if (emitThought) {
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: "thinking out loud" },
+          },
+        });
+      }
 
       yield* agent.client.sessionUpdate({
         sessionId: requestedSessionId,

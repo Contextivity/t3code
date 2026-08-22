@@ -220,6 +220,7 @@ export function makeAcpContentDeltaEvent(input: {
   readonly turnId: TurnId | undefined;
   readonly itemId?: string;
   readonly text: string;
+  readonly streamKind?: "assistant_text" | "reasoning_text";
   readonly rawPayload: unknown;
 }): ProviderRuntimeEvent {
   return {
@@ -230,7 +231,7 @@ export function makeAcpContentDeltaEvent(input: {
     turnId: input.turnId,
     ...(input.itemId ? { itemId: RuntimeItemId.make(input.itemId) } : {}),
     payload: {
-      streamKind: "assistant_text",
+      streamKind: input.streamKind ?? streamKindFromRawPayload(input.rawPayload),
       delta: input.text,
     },
     raw: {
@@ -239,4 +240,17 @@ export function makeAcpContentDeltaEvent(input: {
       payload: input.rawPayload,
     },
   };
+}
+
+function streamKindFromRawPayload(rawPayload: unknown): "assistant_text" | "reasoning_text" {
+  if (typeof rawPayload !== "object" || rawPayload === null) {
+    return "assistant_text";
+  }
+  const update = "update" in rawPayload ? rawPayload.update : undefined;
+  if (typeof update !== "object" || update === null) {
+    return "assistant_text";
+  }
+  return "sessionUpdate" in update && update.sessionUpdate === "agent_thought_chunk"
+    ? "reasoning_text"
+    : "assistant_text";
 }

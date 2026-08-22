@@ -107,6 +107,7 @@ export type AcpParsedSessionEvent =
       readonly _tag: "ContentDelta";
       readonly itemId?: string;
       readonly text: string;
+      readonly streamKind?: "assistant_text" | "reasoning_text";
       readonly rawPayload: unknown;
     };
 
@@ -315,6 +316,7 @@ function makeToolCallState(
     readonly rawOutput?: unknown;
     readonly content?: ReadonlyArray<EffectAcpSchema.ToolCallContent> | null | undefined;
     readonly locations?: ReadonlyArray<EffectAcpSchema.ToolCallLocation> | null | undefined;
+    readonly meta?: { readonly [x: string]: unknown } | null | undefined;
   },
   options?: {
     readonly fallbackStatus?: "pending" | "inProgress" | "completed" | "failed";
@@ -351,6 +353,9 @@ function makeToolCallState(
   if (input.locations !== undefined) {
     data.locations = input.locations;
   }
+  if (input.meta !== undefined && input.meta !== null) {
+    data._meta = input.meta;
+  }
   const fallbackDetail = command ?? normalizedTitle ?? textContent;
   const hasPresentationSeed =
     title !== undefined ||
@@ -383,6 +388,7 @@ function parseTypedToolCallState(
   event: AcpToolCallUpdate,
   options?: {
     readonly fallbackStatus?: "pending" | "inProgress" | "completed" | "failed";
+    readonly notificationMeta?: { readonly [x: string]: unknown } | null;
   },
 ): AcpToolCallState | undefined {
   return makeToolCallState(
@@ -395,9 +401,23 @@ function parseTypedToolCallState(
       rawOutput: event.rawOutput,
       content: event.content,
       locations: event.locations,
+      meta: mergeAcpMeta(options?.notificationMeta, event._meta),
     },
     options,
   );
+}
+
+function mergeAcpMeta(
+  notificationMeta: { readonly [x: string]: unknown } | null | undefined,
+  updateMeta: { readonly [x: string]: unknown } | null | undefined,
+): { readonly [x: string]: unknown } | undefined {
+  const notification =
+    notificationMeta && typeof notificationMeta === "object" ? notificationMeta : undefined;
+  const update = updateMeta && typeof updateMeta === "object" ? updateMeta : undefined;
+  if (!notification && !update) {
+    return undefined;
+  }
+  return { ...notification, ...update };
 }
 
 export function mergeToolCallState(
@@ -543,6 +563,7 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
     case "tool_call": {
       const toolCall = parseTypedToolCallState(upd, {
         fallbackStatus: "pending",
+        notificationMeta: params._meta,
       });
       if (toolCall) {
         events.push({
@@ -554,7 +575,9 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
       break;
     }
     case "tool_call_update": {
-      const toolCall = parseTypedToolCallState(upd);
+      const toolCall = parseTypedToolCallState(upd, {
+        notificationMeta: params._meta,
+      });
       if (toolCall) {
         events.push({
           _tag: "ToolCallUpdated",
@@ -569,6 +592,18 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
         events.push({
           _tag: "ContentDelta",
           text: upd.content.text,
+          streamKind: "assistant_text",
+          rawPayload: params,
+        });
+      }
+      break;
+    }
+    case "agent_thought_chunk": {
+      if (upd.content.type === "text" && upd.content.text.length > 0) {
+        events.push({
+          _tag: "ContentDelta",
+          text: upd.content.text,
+          streamKind: "reasoning_text",
           rawPayload: params,
         });
       }

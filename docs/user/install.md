@@ -65,6 +65,10 @@ to use, then authenticate it.
 Codex and Claude are on by default. Cursor, Grok Build, and OpenCode are off by default; turn
 them on in **Settings** → the provider's card when you want to use them.
 
+ACP Registry is a generic adapter for Agent Client Protocol CLIs such as Contextivity. It is not
+installed by default. Add it from **Settings** → **Add provider**. See
+[ACP Registry](./providers-acp-registry.md).
+
 Cursor is the one to watch: install Cursor CLI, which provides the `cursor-agent` binary that
 T3 Code looks for, but authenticate with `agent login`, not `cursor-agent login`.
 

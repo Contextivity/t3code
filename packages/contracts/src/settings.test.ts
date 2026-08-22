@@ -187,24 +187,31 @@ describe("provider enabled defaults", () => {
     expect(decoded.providers.cursor.enabled).toBe(true);
     expect(decoded.providers.grok.enabled).toBe(false);
     expect(decoded.providers.opencode.enabled).toBe(false);
+    expect("acpRegistry" in decoded.providers).toBe(false);
   });
 
   it("derives per-driver defaults from the settings schemas", () => {
     expect(defaultEnabledForDriver(ProviderDriverKind.make("codex"))).toBe(true);
     expect(defaultEnabledForDriver(ProviderDriverKind.make("cursor"))).toBe(true);
     expect(defaultEnabledForDriver(ProviderDriverKind.make("grok"))).toBe(false);
+    expect(defaultEnabledForDriver(ProviderDriverKind.make("acpRegistry"))).toBe(false);
     // Unknown fork drivers stay enabled; their own build decides otherwise.
     expect(defaultEnabledForDriver(ProviderDriverKind.make("ollama"))).toBe(true);
   });
 
   it("resolves instance enabled state with explicit false winning", () => {
     const grok = ProviderDriverKind.make("grok");
+    const acpRegistry = ProviderDriverKind.make("acpRegistry");
     const codex = ProviderDriverKind.make("codex");
     // No flags anywhere: driver default applies.
     expect(resolveProviderInstanceEnabled({ driver: grok, config: {} })).toBe(false);
+    expect(resolveProviderInstanceEnabled({ driver: acpRegistry, config: {} })).toBe(false);
     expect(resolveProviderInstanceEnabled({ driver: codex, config: {} })).toBe(true);
     // Envelope flag wins over the driver default.
     expect(resolveProviderInstanceEnabled({ driver: grok, enabled: true, config: {} })).toBe(true);
+    expect(resolveProviderInstanceEnabled({ driver: acpRegistry, enabled: true, config: {} })).toBe(
+      true,
+    );
     expect(resolveProviderInstanceEnabled({ driver: codex, enabled: false, config: {} })).toBe(
       false,
     );
