@@ -5,11 +5,9 @@
  * Notification: `_contextivity/subagent_event`.
  *
  * Any ACP agent may advertise this contract. Contextivity is the first producer.
- * Parsing is defensive: malformed optional fields drop that record; a bad
- * envelope is ignored. Never throw into the ACP turn.
+ * Parsing is defensive: a malformed envelope, including any unparseable record,
+ * is ignored. Never throw into the ACP turn.
  */
-
-import type { RuntimeTaskUsage } from "@t3tools/contracts";
 
 export const ACP_SUBAGENT_EVENT_METHOD = "_contextivity/subagent_event";
 export const ACP_SUBAGENT_EVENTS_VERSION = 1;
@@ -37,14 +35,21 @@ const TERMINAL_KINDS = new Set(["completed", "reported", "failed", "cancelled"])
 const REPORT_STATUSES = new Set(["completed", "failed", "needs_review", "findings"]);
 
 const MAX_ID = 128;
+const MAX_SESSION_ID = 128;
+const MAX_NAME = 160;
+const MAX_TYPE = 64;
+const MAX_MODEL = 128;
+const MAX_TASK_FIELD = 160;
 const MAX_DESCRIPTION = 160;
 const MAX_ACTIVITY = 160;
 const MAX_SUMMARY = 240;
 const MAX_ERROR = 240;
 const MAX_RECENT = 5;
 const MAX_RECENT_ITEM = 80;
-const MAX_LINEAGE = 16;
-const MAX_ROSTER = 100;
+const MAX_LINEAGE = 8;
+const MAX_SNAPSHOT_RECORDS = 64;
+const MAX_DELTA_RECORDS = 8;
+const MAX_SPAWN_DEPTH = 7;
 
 export interface AcpSubagentRecentActivity {
   readonly updatedAt: number;
@@ -77,7 +82,6 @@ export interface AcpSubagentRecord {
   readonly lastToolName?: string;
   readonly recentActivity?: AcpSubagentRecentActivity;
   readonly terminal?: AcpSubagentTerminal;
-  readonly usage?: RuntimeTaskUsage;
   readonly runtimeEpoch?: number;
   readonly startedAt?: number;
   readonly completedAt?: number;
@@ -157,28 +161,33 @@ export function parseAcpSubagentEvent(value: unknown): AcpSubagentEventPayload |
   try {
     if (!isRecord(value)) return undefined;
     if (value.version !== ACP_SUBAGENT_EVENTS_VERSION) return undefined;
-    if (typeof value.sessionId !== "string" || value.sessionId.length === 0) return undefined;
-    const sessionId = boundId(value.sessionId);
+    const sessionId = boundIdentity(value.sessionId, MAX_SESSION_ID);
     if (!sessionId) return undefined;
     if (!Number.isInteger(value.sequence) || (value.sequence as number) < 1) return undefined;
-    const normalized = normalizeKind(value);
-    if (!normalized) return undefined;
-    const rawRecords = recordsFromUnknown(value);
-    if (rawRecords === undefined) return undefined;
-    const records: AcpSubagentRecord[] = [];
-    for (const item of rawRecords) {
-      const parsed = parseAcpSubagentRecord(item);
-      if (!parsed) continue;
-      records.push(parsed);
-      if (records.length >= MAX_ROSTER) break;
+    if (value.kind !== "snapshot" && value.kind !== "delta") return undefined;
+    if (
+      value.kind === "delta" &&
+      value.change !== "started" &&
+      value.change !== "updated" &&
+      value.change !== "terminal"
+    ) {
+      return undefined;
     }
-    if (normalized.kind === "delta" && records.length === 0) return undefined;
+    if (!Array.isArray(value.records)) return undefined;
+    const limit = value.kind === "snapshot" ? MAX_SNAPSHOT_RECORDS : MAX_DELTA_RECORDS;
+    const records: AcpSubagentRecord[] = [];
+    for (const item of value.records) {
+      if (records.length >= limit) break;
+      const parsed = parseAcpSubagentRecord(item);
+      if (!parsed) return undefined;
+      records.push(parsed);
+    }
     return {
       version: ACP_SUBAGENT_EVENTS_VERSION,
       sessionId,
       sequence: value.sequence as number,
-      kind: normalized.kind,
-      ...(normalized.change ? { change: normalized.change } : {}),
+      kind: value.kind,
+      ...(value.kind === "delta" ? { change: value.change as AcpSubagentDeltaChange } : {}),
       records,
     };
   } catch {
@@ -188,37 +197,39 @@ export function parseAcpSubagentEvent(value: unknown): AcpSubagentEventPayload |
 
 export function parseAcpSubagentRecord(value: unknown): AcpSubagentRecord | undefined {
   if (!isRecord(value)) return undefined;
-  const agentId = boundId(value.agentId);
+  const agentId = boundIdentity(value.agentId);
   if (!agentId) return undefined;
   if (!LIFECYCLE_STATE_SET.has(value.state as string)) return undefined;
-  if (typeof value.updatedAt !== "number" || !Number.isFinite(value.updatedAt)) return undefined;
+  const updatedAt = asTimestamp(value.updatedAt);
+  if (updatedAt === undefined) return undefined;
 
-  const parentAgentId = boundId(value.parentAgentId);
-  const displayName = boundedText(value.displayName, MAX_DESCRIPTION);
-  const typeName = boundedText(value.typeName, MAX_DESCRIPTION);
-  const role = boundedText(value.role, MAX_DESCRIPTION) ?? typeName;
-  const taskId = boundId(value.taskId);
-  const taskSubject = boundedText(value.taskSubject, MAX_DESCRIPTION);
+  const parentAgentId = boundIdentity(value.parentAgentId);
+  const displayName = boundedText(value.displayName, MAX_NAME);
+  const typeName = boundedText(value.typeName, MAX_TYPE);
+  const role = boundedText(value.role, MAX_TYPE);
+  const taskId = boundIdentity(value.taskId, MAX_TASK_FIELD);
+  const taskSubject = boundedText(value.taskSubject, MAX_TASK_FIELD);
   const description = boundedText(value.description, MAX_DESCRIPTION);
-  const modelId = boundedText(value.modelId, MAX_DESCRIPTION);
+  const modelId = boundedText(value.modelId, MAX_MODEL);
   const latestActivity = boundedText(value.latestActivity, MAX_ACTIVITY);
-  const lastToolName = boundedText(value.lastToolName, MAX_ACTIVITY);
+  const lastToolName = boundedText(value.lastToolName, MAX_RECENT_ITEM);
   const lineage = Array.isArray(value.lineage)
     ? value.lineage
         .flatMap((id) => {
-          const next = boundId(id);
+          const next = boundIdentity(id);
           return next ? [next] : [];
         })
         .slice(0, MAX_LINEAGE)
     : [];
   const recent = parseRecentActivity(value.recentActivity);
   const terminal = parseTerminal(value.terminal);
-  const usage = parseUsage(value.usage ?? value.typedUsage);
+  const startedAt = asTimestamp(value.startedAt);
+  const completedAt = asTimestamp(value.completedAt);
 
   return {
     agentId,
     state: value.state as AcpSubagentLifecycleState,
-    updatedAt: value.updatedAt,
+    updatedAt,
     ...(parentAgentId ? { parentAgentId } : {}),
     ...(displayName ? { displayName } : {}),
     ...(typeName ? { typeName } : {}),
@@ -231,20 +242,15 @@ export function parseAcpSubagentRecord(value: unknown): AcpSubagentRecord | unde
     ...(lastToolName ? { lastToolName } : {}),
     ...(lineage.length > 0 ? { lineage } : {}),
     ...(typeof value.spawnDepth === "number" && Number.isFinite(value.spawnDepth)
-      ? { spawnDepth: value.spawnDepth }
+      ? { spawnDepth: Math.min(Math.max(0, Math.trunc(value.spawnDepth)), MAX_SPAWN_DEPTH) }
       : {}),
     ...(typeof value.runtimeEpoch === "number" && Number.isFinite(value.runtimeEpoch)
       ? { runtimeEpoch: value.runtimeEpoch }
       : {}),
-    ...(typeof value.startedAt === "number" && Number.isFinite(value.startedAt)
-      ? { startedAt: value.startedAt }
-      : {}),
-    ...(typeof value.completedAt === "number" && Number.isFinite(value.completedAt)
-      ? { completedAt: value.completedAt }
-      : {}),
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(completedAt !== undefined ? { completedAt } : {}),
     ...(recent ? { recentActivity: recent } : {}),
     ...(terminal ? { terminal } : {}),
-    ...(usage ? { usage } : {}),
   };
 }
 
@@ -257,39 +263,16 @@ function metaAdvertisesSubagentEvents(meta: unknown): boolean {
   return advertised.version === ACP_SUBAGENT_EVENTS_VERSION;
 }
 
-function normalizeKind(
-  rec: Record<string, unknown>,
-): { kind: AcpSubagentEventKind; change?: AcpSubagentDeltaChange } | undefined {
-  if (rec.kind === "snapshot") return { kind: "snapshot" };
-  if (rec.kind === "delta") {
-    if (rec.change !== "started" && rec.change !== "updated" && rec.change !== "terminal") {
-      return undefined;
-    }
-    return { kind: "delta", change: rec.change };
-  }
-  // Host-task aliases: the T3 ingestion brief listed per-lifecycle kinds.
-  // The producer wire uses snapshot/delta; accept both so either side can land.
-  if (rec.kind === "started") return { kind: "delta", change: "started" };
-  if (rec.kind === "progress" || rec.kind === "status" || rec.kind === "updated") {
-    return { kind: "delta", change: "updated" };
-  }
-  if (rec.kind === "completed" || rec.kind === "terminal") {
-    return { kind: "delta", change: "terminal" };
-  }
-  return undefined;
-}
-
 function recordsFromUnknown(value: Record<string, unknown>): unknown[] | undefined {
-  if (Array.isArray(value.records)) return value.records;
-  if (Array.isArray(value.subagents)) return value.subagents;
-  if (value.subagent !== undefined) return [value.subagent];
-  return undefined;
+  return Array.isArray(value.records) ? value.records : undefined;
 }
 
 function parseRecentActivity(value: unknown): AcpSubagentRecentActivity | undefined {
-  if (!isRecord(value) || typeof value.updatedAt !== "number") return undefined;
+  if (!isRecord(value)) return undefined;
+  const updatedAt = asTimestamp(value.updatedAt);
+  if (updatedAt === undefined) return undefined;
   return {
-    updatedAt: value.updatedAt,
+    updatedAt,
     assistantMessages: boundStringList(value.assistantMessages),
     toolCalls: boundStringList(value.toolCalls),
   };
@@ -297,7 +280,8 @@ function parseRecentActivity(value: unknown): AcpSubagentRecentActivity | undefi
 
 function parseTerminal(value: unknown): AcpSubagentTerminal | undefined {
   if (!isRecord(value)) return undefined;
-  if (!TERMINAL_KINDS.has(value.kind as string) || typeof value.endedAt !== "number") {
+  const endedAt = asTimestamp(value.endedAt);
+  if (!TERMINAL_KINDS.has(value.kind as string) || endedAt === undefined) {
     return undefined;
   }
   const summary = boundedText(value.summary, MAX_SUMMARY);
@@ -308,36 +292,11 @@ function parseTerminal(value: unknown): AcpSubagentTerminal | undefined {
       : undefined;
   return {
     kind: value.kind as string,
-    endedAt: value.endedAt,
+    endedAt,
     ...(summary ? { summary } : {}),
     ...(error ? { error } : {}),
     ...(reportStatus ? { reportStatus } : {}),
   };
-}
-
-function parseUsage(value: unknown): RuntimeTaskUsage | undefined {
-  if (!isRecord(value)) return undefined;
-  const totalTokens = nonNegativeInt(value.totalTokens);
-  if (totalTokens === undefined) return undefined;
-  const inputTokens = nonNegativeInt(value.inputTokens);
-  const cachedInputTokens = nonNegativeInt(value.cachedInputTokens);
-  const outputTokens = nonNegativeInt(value.outputTokens);
-  const reasoningOutputTokens = nonNegativeInt(value.reasoningOutputTokens);
-  const toolUses = nonNegativeInt(value.toolUses);
-  const durationMs = nonNegativeInt(value.durationMs);
-  return {
-    totalTokens,
-    ...(inputTokens !== undefined ? { inputTokens } : {}),
-    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
-    ...(outputTokens !== undefined ? { outputTokens } : {}),
-    ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
-    ...(toolUses !== undefined ? { toolUses } : {}),
-    ...(durationMs !== undefined ? { durationMs } : {}),
-  };
-}
-
-function nonNegativeInt(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 function boundStringList(value: unknown): ReadonlyArray<string> {
@@ -351,11 +310,13 @@ function boundStringList(value: unknown): ReadonlyArray<string> {
   return out;
 }
 
-function boundId(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return undefined;
-  return trimmed.length <= MAX_ID ? trimmed : trimmed.slice(0, MAX_ID);
+function asTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function boundIdentity(value: unknown, max = MAX_ID): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > max) return undefined;
+  return value;
 }
 
 function boundedText(value: unknown, max: number): string | undefined {

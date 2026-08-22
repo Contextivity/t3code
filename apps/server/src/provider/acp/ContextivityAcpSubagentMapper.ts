@@ -106,8 +106,9 @@ function applyRecord(
 
   const terminal = isAcpSubagentTerminalState(record.state) || change === "terminal";
   if (child.terminalEmitted && !isNewEpoch) {
-    if (terminal) return;
-    emitProgressIfPresent(events, record);
+    if (change === "updated") {
+      emitProgressIfPresent(events, record);
+    }
     return;
   }
 
@@ -169,7 +170,6 @@ function emitTerminal(
         status: "stopped",
         ...linkage(record),
         ...(summary ? { summary } : {}),
-        ...(record.usage ? { typedUsage: record.usage } : {}),
       },
     });
     child.terminalEmitted = true;
@@ -185,7 +185,6 @@ function emitTerminal(
       status: failed ? "failed" : "completed",
       ...linkage(record),
       ...(summary ? { summary } : {}),
-      ...(record.usage ? { typedUsage: record.usage } : {}),
     },
   });
   child.terminalEmitted = true;
@@ -223,7 +222,7 @@ function emitProgressIfPresent(
     record.lastToolName ??
     record.recentActivity?.assistantMessages.at(-1) ??
     record.recentActivity?.toolCalls.at(-1);
-  if (!summary && !record.lastToolName && !record.usage) return;
+  if (!summary && !record.lastToolName) return;
   const description =
     record.displayName ?? record.description ?? record.taskSubject ?? record.agentId;
   events.push({
@@ -234,7 +233,6 @@ function emitProgressIfPresent(
       ...linkage(record),
       ...(summary ? { summary } : {}),
       ...(record.lastToolName ? { lastToolName: record.lastToolName } : {}),
-      ...(record.usage ? { typedUsage: record.usage } : {}),
     },
   });
 }

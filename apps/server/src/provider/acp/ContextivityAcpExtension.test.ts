@@ -56,7 +56,7 @@ describe("ContextivityAcpExtension", () => {
       sessionId: "sess-1",
       sequence: 1,
       kind: "snapshot",
-      records: [{ agentId: "child-1", parentAgentId: "root", role: "scout" }],
+      records: [{ agentId: "child-1", parentAgentId: "root", typeName: "scout" }],
     });
     expect(snapshot).not.toHaveProperty("change");
 
@@ -71,37 +71,50 @@ describe("ContextivityAcpExtension", () => {
     expect(delta?.change).toBe("started");
   });
 
-  it("accepts host-task kind aliases and subagent/subagents field names", () => {
-    expect(
-      parseAcpSubagentEvent({
-        version: 1,
-        sessionId: "s",
-        sequence: 1,
-        kind: "started",
-        subagent: record(),
-      }),
-    ).toMatchObject({ kind: "delta", change: "started" });
+  it("rejects draft kind aliases and non-records envelopes", () => {
+    for (const kind of ["started", "progress", "status", "completed", "updated", "terminal"]) {
+      expect(
+        parseAcpSubagentEvent({
+          version: 1,
+          sessionId: "s",
+          sequence: 1,
+          kind,
+          records: [record()],
+        }),
+      ).toBeUndefined();
+    }
     expect(
       parseAcpSubagentEvent({
         version: 1,
         sessionId: "s",
         sequence: 2,
-        kind: "progress",
-        subagents: [record()],
+        kind: "delta",
+        change: "progress",
+        records: [record()],
       }),
-    ).toMatchObject({ kind: "delta", change: "updated" });
+    ).toBeUndefined();
     expect(
       parseAcpSubagentEvent({
         version: 1,
         sessionId: "s",
         sequence: 3,
-        kind: "completed",
-        records: [record({ state: "completed" })],
+        kind: "delta",
+        change: "started",
+        subagent: record(),
       }),
-    ).toMatchObject({ kind: "delta", change: "terminal" });
+    ).toBeUndefined();
+    expect(
+      parseAcpSubagentEvent({
+        version: 1,
+        sessionId: "s",
+        sequence: 4,
+        kind: "snapshot",
+        subagents: [record()],
+      }),
+    ).toBeUndefined();
   });
 
-  it("rejects malformed envelopes and keeps oversized fields bounded", () => {
+  it("rejects malformed envelopes and unparseable records", () => {
     expect(
       parseAcpSubagentEvent({
         version: 1,
@@ -130,7 +143,18 @@ describe("ContextivityAcpExtension", () => {
       }),
     ).toBeUndefined();
     expect(parseAcpSubagentEvent("nope")).toBeUndefined();
+    expect(
+      parseAcpSubagentEvent({
+        version: 1,
+        sessionId: "s",
+        sequence: 1,
+        kind: "snapshot",
+        records: [record(), { agentId: "bad" }],
+      }),
+    ).toBeUndefined();
+  });
 
+  it("redacts and truncates display fields without inventing usage", () => {
     const parsed = parseAcpSubagentEvent({
       version: 1,
       sessionId: "s",
@@ -142,27 +166,6 @@ describe("ContextivityAcpExtension", () => {
           description: `api_key=sk-live-123 ${"x".repeat(400)}`,
           latestActivity: `token=super-secret ${"y".repeat(400)}`,
           unknownField: { nested: true },
-        }),
-        { agentId: "bad" },
-      ],
-    });
-    expect(parsed?.records).toHaveLength(1);
-    expect(parsed?.records[0]?.description).toContain("[redacted]");
-    expect(parsed?.records[0]?.description?.length).toBeLessThanOrEqual(160);
-    expect(parsed?.records[0]?.latestActivity).toContain("[redacted]");
-    expect(parsed?.records[0]?.latestActivity?.length).toBeLessThanOrEqual(160);
-    expect(parsed?.records[0]).not.toHaveProperty("unknownField");
-  });
-
-  it("parses optional usage and bounds recent activity", () => {
-    const parsed = parseAcpSubagentEvent({
-      version: 1,
-      sessionId: "s",
-      sequence: 4,
-      kind: "delta",
-      change: "updated",
-      records: [
-        record({
           usage: { totalTokens: 9, inputTokens: 3, outputTokens: -1 },
           recentActivity: {
             updatedAt: 2,
@@ -172,8 +175,76 @@ describe("ContextivityAcpExtension", () => {
         }),
       ],
     });
-    expect(parsed?.records[0]?.usage).toEqual({ totalTokens: 9, inputTokens: 3 });
+    expect(parsed?.records).toHaveLength(1);
+    expect(parsed?.records[0]?.description).toContain("[redacted]");
+    expect(parsed?.records[0]?.description?.length).toBeLessThanOrEqual(160);
+    expect(parsed?.records[0]?.latestActivity).toContain("[redacted]");
+    expect(parsed?.records[0]?.latestActivity?.length).toBeLessThanOrEqual(160);
+    expect(parsed?.records[0]).not.toHaveProperty("unknownField");
+    expect(parsed?.records[0]).not.toHaveProperty("usage");
     expect(parsed?.records[0]?.recentActivity?.assistantMessages).toHaveLength(5);
+  });
+
+  it("rejects oversized identities and caps snapshot, delta, and lineage bounds", () => {
+    expect(
+      parseAcpSubagentEvent({
+        version: 1,
+        sessionId: "s".repeat(129),
+        sequence: 1,
+        kind: "snapshot",
+        records: [record()],
+      }),
+    ).toBeUndefined();
+    expect(
+      parseAcpSubagentEvent({
+        version: 1,
+        sessionId: "s",
+        sequence: 1,
+        kind: "snapshot",
+        records: [record({ agentId: "x".repeat(129) })],
+      }),
+    ).toBeUndefined();
+
+    const snapshot = parseAcpSubagentEvent({
+      version: 1,
+      sessionId: "s",
+      sequence: 1,
+      kind: "snapshot",
+      records: Array.from({ length: 68 }, (_, index) => record({ agentId: `a${index}` })),
+    });
+    expect(snapshot?.records).toHaveLength(64);
+
+    const delta = parseAcpSubagentEvent({
+      version: 1,
+      sessionId: "s",
+      sequence: 2,
+      kind: "delta",
+      change: "updated",
+      records: Array.from({ length: 12 }, (_, index) => record({ agentId: `d${index}` })),
+    });
+    expect(delta?.records).toHaveLength(8);
+
+    const withLineage = parseAcpSubagentEvent({
+      version: 1,
+      sessionId: "s",
+      sequence: 3,
+      kind: "snapshot",
+      records: [
+        record({
+          lineage: Array.from({ length: 12 }, (_, index) => `id-${index}`),
+        }),
+      ],
+    });
+    expect(withLineage?.records[0]?.lineage).toHaveLength(8);
+    expect(
+      parseAcpSubagentEvent({
+        version: 1,
+        sessionId: "s",
+        sequence: 4,
+        kind: "snapshot",
+        records: [record({ lineage: ["ok", "x".repeat(129), "kept"] })],
+      })?.records[0]?.lineage,
+    ).toEqual(["ok", "kept"]);
   });
 
   it("summarizes payloads without copying secrets", () => {

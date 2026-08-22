@@ -1061,7 +1061,7 @@ it.layer(acpRegistryAdapterTestLayer)("AcpRegistryAdapterLive", (it) => {
     }),
   );
 
-  it.effect("maps optional usage onto task.progress", () =>
+  it.effect("does not fabricate usage from an extra record field", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("acp-registry-subagent-usage");
       const wrapperPath = yield* Effect.promise(() =>
@@ -1076,7 +1076,7 @@ it.layer(acpRegistryAdapterTestLayer)("AcpRegistryAdapterLive", (it) => {
         (events) =>
           events.some(
             (event) =>
-              event.type === "task.progress" && event.payload.typedUsage?.totalTokens === 42,
+              event.type === "task.progress" && event.payload.summary === "counting tokens",
           ) && events.some((event) => event.type === "turn.completed"),
       );
 
@@ -1095,13 +1095,10 @@ it.layer(acpRegistryAdapterTestLayer)("AcpRegistryAdapterLive", (it) => {
 
       const progress = runtimeEvents.find(
         (event): event is Extract<ProviderRuntimeEvent, { type: "task.progress" }> =>
-          event.type === "task.progress" && event.payload.typedUsage?.totalTokens === 42,
+          event.type === "task.progress" && event.payload.summary === "counting tokens",
       );
-      assert.deepStrictEqual(progress?.payload.typedUsage, {
-        totalTokens: 42,
-        inputTokens: 10,
-        outputTokens: 32,
-      });
+      assert.isDefined(progress);
+      assert.isUndefined(progress?.payload.typedUsage);
 
       yield* Fiber.interrupt(runtimeEventsFiber);
       yield* adapter.stopSession(threadId);

@@ -152,19 +152,42 @@ describe("ContextivityAcpSubagentMapper", () => {
     ]);
   });
 
-  it("maps optional usage onto progress", () => {
-    const { events } = apply(
+  it("treats a later summary patch as updated, not a second terminal", () => {
+    let state = emptyContextivitySubagentMapperState();
+    const completed = apply(
       event({
         sequence: 1,
         kind: "delta",
-        change: "updated",
-        records: [record({ usage: { totalTokens: 42, inputTokens: 10 } })],
+        change: "terminal",
+        records: [
+          record({
+            runtimeEpoch: 1,
+            state: "completed",
+            terminal: { kind: "completed", endedAt: 2, summary: "done" },
+          }),
+        ],
       }),
+      state,
     );
-    const progress = events.find((entry) => entry.type === "task.progress");
-    expect(progress).toMatchObject({
-      payload: { typedUsage: { totalTokens: 42, inputTokens: 10 } },
-    });
+    state = completed.state;
+    const patch = apply(
+      event({
+        sequence: 2,
+        kind: "delta",
+        change: "updated",
+        records: [
+          record({
+            runtimeEpoch: 1,
+            state: "completed",
+            latestActivity: "wrote report",
+            terminal: { kind: "completed", endedAt: 2, summary: "done, with notes" },
+          }),
+        ],
+      }),
+      state,
+    );
+    expect(patch.events.some((entry) => entry.type === "task.completed")).toBe(false);
+    expect(patch.events.some((entry) => entry.type === "task.progress")).toBe(true);
   });
 
   it("supports concurrent children and nesting", () => {

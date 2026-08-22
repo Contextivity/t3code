@@ -38,41 +38,39 @@ JSON-RPC method: `_contextivity/subagent_event`.
 | `sessionId` | ACP session id for this connection                                                  |
 | `sequence`  | Per-session integer starting at `1`; duplicates and out-of-order deltas are ignored |
 | `kind`      | `snapshot` (reconcile roster) or `delta` (one change)                               |
-| `change`    | Deltas only: `started`, `updated`, or `terminal`                                    |
-| `records`   | Bounded child records. Aliases `subagent` / `subagents` are also accepted           |
+| `change`    | Required on deltas only: `started`, `updated`, or `terminal`                        |
+| `records`   | Array of bounded child records (normally one record for a delta)                    |
 
-T3 also accepts host-task kind aliases (`started`, `progress`, `status`,
-`completed`) and maps them onto `delta` + `change`. Producers should emit the
-snapshot/delta wire.
+This is the committed producer v1 wire. Draft aliases (`kind: started|progress|status|completed`,
+`subagent` / `subagents`) are rejected.
 
 Emit a `snapshot` after `session/new`, `session/load`, and reconnect. Parents
 before children. `change: "terminal"` once per `agentId`+`runtimeEpoch`. A later
 summary patch is `updated`. A new `runtimeEpoch` is a fresh start, not a
-resurrection.
+resurrection. Identities longer than the bound are dropped, not truncated.
 
 ## Record fields
 
-Authoritative, bounded, sanitized. Omit usage unless the runtime actually has
-per-child counts.
+Authoritative, bounded, sanitized. Usage is omitted in v1; T3 does not require
+or invent per-child token counts.
 
-| Field                                                   | Notes                                                                                                                 |
-| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `agentId`                                               | Stable child id. T3 uses this as `taskId`, never as `TaskAgentLinkage.agentId`                                        |
-| `parentAgentId`                                         | Direct parent when nested                                                                                             |
-| `displayName`, `typeName`, `role`                       | Title / role. `role` may mirror `typeName`                                                                            |
-| `lineage`                                               | Root-first id path including self                                                                                     |
-| `spawnDepth`                                            | `0` = direct child of the orchestrator                                                                                |
-| `taskId`, `taskSubject`, `description`                  | Subject/preview only; never the full prompt                                                                           |
-| `state`                                                 | `spawned`, `running`, `waiting_input`, `waiting_approval`, `idle`, `resetting`, `completed`, `failed`, `cancelled`    |
-| `modelId`                                               | Compact model id when known                                                                                           |
-| `latestActivity`, `lastToolName`, `recentActivity`      | Bounded recent assistant/tool strings                                                                                 |
-| `terminal`                                              | `kind`, `endedAt`, optional bounded `summary` / `error` / `reportStatus`                                              |
-| `usage`                                                 | Optional `{ totalTokens, inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, toolUses, durationMs }` |
-| `runtimeEpoch`, `startedAt`, `completedAt`, `updatedAt` | Timing / identity. `updatedAt` is required                                                                            |
+| Field                                                   | Notes                                                                                                              |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `agentId`                                               | Stable child id. T3 uses this as `taskId`, never as `TaskAgentLinkage.agentId`                                     |
+| `parentAgentId`                                         | Direct parent when nested                                                                                          |
+| `displayName`, `typeName`, `role`                       | Title / role. `role` may mirror `typeName`                                                                         |
+| `lineage`                                               | Root-first id path including self                                                                                  |
+| `spawnDepth`                                            | `0` = direct child of the orchestrator                                                                             |
+| `taskId`, `taskSubject`, `description`                  | Subject/preview only; never the full prompt                                                                        |
+| `state`                                                 | `spawned`, `running`, `waiting_input`, `waiting_approval`, `idle`, `resetting`, `completed`, `failed`, `cancelled` |
+| `modelId`                                               | Compact model id when known                                                                                        |
+| `latestActivity`, `lastToolName`, `recentActivity`      | Bounded recent assistant/tool strings                                                                              |
+| `terminal`                                              | `kind`, `endedAt`, optional bounded `summary` / `error` / `reportStatus`                                           |
+| `runtimeEpoch`, `startedAt`, `completedAt`, `updatedAt` | Timing / identity. `updatedAt` is required                                                                         |
 
 Hidden reasoning, secrets, env/auth, cwd, session files, process ids, and
-unbounded transcripts must not be included. Malformed optional fields drop that
-record; a bad envelope is ignored. The primary turn must not fail.
+unbounded transcripts must not be included. A malformed envelope, including any
+unparseable record, is ignored. The primary turn must not fail.
 
 ## T3 mapping
 
@@ -82,7 +80,7 @@ notification.
 | Producer                     | Canonical event                                          |
 | ---------------------------- | -------------------------------------------------------- |
 | First observation of a child | `task.started`                                           |
-| Activity / usage             | `task.progress`                                          |
+| Activity                     | `task.progress`                                          |
 | Non-terminal `state`         | `task.updated` (`pending`, `running`, `waiting`, `idle`) |
 | `completed` / `failed`       | `task.completed` with that status                        |
 | `cancelled`                  | `task.updated` cancelled, then `task.completed` stopped  |
