@@ -18,6 +18,7 @@ interface HarnessOptions {
   readonly mode?: "web" | "desktop";
   readonly managed?: boolean;
   readonly preflight?: "ready" | "blocked";
+  readonly env?: NodeJS.ProcessEnv;
   readonly requestUpdate?: ServiceLauncherClient.ServiceLauncherClient["Service"]["requestUpdate"];
 }
 
@@ -85,7 +86,9 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
   const config = yield* ServerConfig.ServerConfig.pipe(
     Effect.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
   );
-  const selfUpdate = yield* ServerSelfUpdate.make().pipe(
+  const selfUpdate = yield* ServerSelfUpdate.make(
+    options.env === undefined ? {} : { env: options.env },
+  ).pipe(
     Effect.provideService(ProcessRunner.ProcessRunner, runner),
     Effect.provideService(ServiceLauncherClient.ServiceLauncherClient, launcher),
     Effect.provideService(HostProcessExecutablePath, "/usr/bin/node"),
@@ -104,6 +107,18 @@ it.layer(NodeServices.layer)("server self update", (it) => {
         updateId: "launcher-id",
       });
       expect(order).toEqual(["install", "preflight", "accept"]);
+    }),
+  );
+
+  it.effect("refuses upstream npm package installs on Contextivity distributions", () =>
+    Effect.gen(function* () {
+      const { selfUpdate, order } = yield* makeHarness({
+        env: { CONTEXTIVITY_T3_DISTRIBUTION: "1" },
+      });
+      expect(
+        (yield* selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip)).reason,
+      ).toContain("t3-ctx");
+      expect(order).toEqual([]);
     }),
   );
 

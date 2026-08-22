@@ -11,6 +11,7 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
+- [Contextivity downstream](#contextivity-downstream)
 
 ## Concepts
 
@@ -144,6 +145,18 @@ The patch difference between two checkpoints. Query logic lives in [CheckpointDi
 
 The file patch and changed-file summary for one turn. It is usually computed in [CheckpointDiffQuery.ts][20], represented in [the contracts][1], and recorded into thread state by [projector.ts][4].
 
+### Contextivity downstream
+
+Fork-only distribution on `Contextivity/t3code`. It tracks official `pingdotgg/t3code` nightly tags and publishes self-contained server archives. See [contextivity-downstream.md][27].
+
+#### Dual identity
+
+`upstreamVersion` is the official T3 nightly and is the protocol-visible `serverVersion`. `contextivityRevision` is the Contextivity patch SHA used for install paths and rollback. Official clients must keep seeing the upstream nightly.
+
+#### Candidate / nightly / stable pointers
+
+A candidate is an immutable attested build. The `nightly` fleet pointer moves only after a manual promote that confirms the official Mac desktop version. `stable` is the known-good rollback pointer. Hosts install with `t3-ctx`, never `npx t3@<version>`.
+
 ## Practical Shortcuts
 
 - If you see `requested`, think "intent recorded".
@@ -185,3 +198,4 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [24]: ./overview.md
 [25]: ./acp-subagent-events.md
 [26]: ../../apps/server/src/provider/Layers/AcpRegistryAdapter.ts
+[27]: ../operations/contextivity-downstream.md

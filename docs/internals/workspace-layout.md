@@ -53,6 +53,8 @@ the task commands.
 - `oxlint-plugin-t3code/`: repo-specific lint rules.
 - `experiments/`: throwaway prototypes. Not part of the shipped build.
 - `docs/`: this documentation tree.
+- `contextivity/`: Contextivity fork-only nightly distribution (candidate builds, updater, fleet).
+  Not part of the generic ACP provider. See [contextivity-downstream.md](../operations/contextivity-downstream.md).
 
 ## Import conventions
 

@@ -1,0 +1,251 @@
+name: Contextivity candidate
+
+on:
+  schedule:
+    - cron: "15 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact official pingdotgg/t3code nightly tag (vX.Y.Z-nightly.YYYYMMDD.N)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  id-token: write
+  attestations: write
+  actions: read
+
+concurrency:
+  group: contextivity-candidate
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync exact upstream nightly
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.sync.outputs.tag }}
+      sha: ${{ steps.sync.outputs.sha }}
+      upstream_commit: ${{ steps.sync.outputs.upstream_commit }}
+    steps:
+      - name: Checkout downstream
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: package.json
+
+      - id: discover
+        name: Discover official upstream nightly
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -eu
+          if test -n "${INPUT_TAG:-}"; then
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          else
+            node --experimental-strip-types contextivity/src/cli.ts discover-upstream > "$RUNNER_TEMP/upstream.json"
+            node -e 'const fs=require("fs"); const n=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/upstream.json","utf8")); fs.appendFileSync(process.env.GITHUB_OUTPUT, "tag="+n.tag+"\n")'
+          fi
+
+      - id: sync
+        name: Merge exact upstream tag
+        run: |
+          set -eu
+          tag="${{ steps.discover.outputs.tag }}"
+          if ! node --experimental-strip-types contextivity/src/cli.ts sync-tag --tag "$tag" > "$RUNNER_TEMP/sync.json"; then
+            reason=$(node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/sync.json","utf8")); process.stdout.write(s.reason||"sync failed")')
+            node --experimental-strip-types contextivity/src/cli.ts report-sync-failure --tag "$tag" --reason "$reason" || true
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "upstream_commit=$(node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/sync.json","utf8")); process.stdout.write(s.upstreamCommit||"")')" >> "$GITHUB_OUTPUT"
+
+      - name: Downstream unit tests
+        run: node --test --experimental-strip-types contextivity/src/*.test.ts
+
+      - name: Persist synced commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          sha=$(git rev-parse HEAD)
+          if git merge-base --is-ancestor "$sha" "origin/${GITHUB_REF_NAME}" 2>/dev/null; then
+            exit 0
+          fi
+          git push origin "HEAD:refs/heads/contextivity-sync/${GITHUB_RUN_ID}"
+
+  verify:
+    name: ACP tests and server build
+    needs: sync
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout synced SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Print candidate test plan
+        run: node --experimental-strip-types contextivity/src/cli.ts candidate-test-plan
+
+      - name: Generic ACP and sub-agent tests
+        run: |
+          vp test run \
+            apps/server/src/provider/Layers/AcpRegistryAdapter.test.ts \
+            apps/server/src/provider/Layers/AcpRegistryProvider.test.ts \
+            apps/server/src/provider/acp/AcpAdapterSupport.test.ts \
+            apps/server/src/provider/acp/AcpCoreRuntimeEvents.test.ts \
+            apps/server/src/provider/acp/AcpRegistrySupport.test.ts \
+            apps/server/src/provider/acp/AcpRuntimeModel.test.ts \
+            apps/server/src/provider/acp/AcpSessionRuntime.policy.test.ts \
+            apps/server/src/provider/acp/ContextivityAcpExtension.test.ts \
+            apps/server/src/provider/acp/ContextivityAcpSubagentMapper.test.ts \
+            packages/client-runtime/src/state/subagentRuntime.test.ts \
+            apps/server/src/distribution/contextivityDistribution.test.ts \
+            apps/server/src/cloud/selfUpdate.test.ts
+
+      - name: Server typecheck and build
+        run: |
+          vp run --filter t3 typecheck
+          vp run --filter t3 build
+
+      - name: Upload server dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: t3-server-dist
+          path: apps/server/dist
+          if-no-files-found: error
+
+  pack:
+    name: Pack ${{ matrix.platform }}
+    needs: [sync, verify]
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux-x64
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+          - os: macos-13
+            platform: darwin-x64
+          - os: macos-14
+            platform: darwin-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout synced SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Build server
+        run: vp run --filter t3 build
+
+      - name: Stage self-contained archive
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -eu
+          mkdir -p contextivity-dist
+          node --experimental-strip-types contextivity/src/pack-server.ts \
+            --platform "$PLATFORM" \
+            --out contextivity-dist \
+            --upstream-version "$(node -e 'console.log(require("./apps/server/package.json").version)')" \
+            --contextivity-revision "$(git rev-parse --short=7 HEAD)"
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.platform }}
+          path: contextivity-dist/t3-server-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish immutable candidate
+    needs: [sync, pack]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: package.json
+
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: archive-*
+          merge-multiple: true
+          path: contextivity-dist
+
+      - name: Write candidate manifest
+        env:
+          TAG: ${{ needs.sync.outputs.tag }}
+          SHA: ${{ needs.sync.outputs.sha }}
+        run: |
+          set -eu
+          node --experimental-strip-types contextivity/src/write-candidate-manifest.ts \
+            --tag "$TAG" \
+            --sha "${{ needs.sync.outputs.upstream_commit }}" \
+            --dir contextivity-dist \
+            --build-revision "${GITHUB_RUN_ID}-${GITHUB_SHA}" \
+            --node-engine "$(node -e 'console.log(require("./apps/server/package.json").engines.node)')" \
+            --contextivity-revision "$(git rev-parse --short=7 HEAD)"
+
+      - name: Attest artifacts
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: contextivity-dist/*
+
+      - name: Publish immutable candidate release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          node --experimental-strip-types contextivity/src/cli.ts publish-candidate \
+            --dir contextivity-dist \
+            --repo "${{ github.repository }}"
+
+      - name: Advance downstream branch after a successful candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          git push origin "${{ needs.sync.outputs.sha }}:refs/heads/${GITHUB_REF_NAME}"
+          git push origin --delete "contextivity-sync/${GITHUB_RUN_ID}" || true
+
+      - name: Upload candidate assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: contextivity-candidate
+          path: contextivity-dist
+          if-no-files-found: error
