@@ -1,5 +1,8 @@
 import {
   ApprovalRequestId,
+  type ProviderGoalControlInput,
+  type ProviderGoalControlResult,
+  type ProviderGoalControlError,
   DEFAULT_MODEL,
   EventId,
   ProviderDriverKind,
@@ -28,6 +31,7 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -36,6 +40,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
+import { makeCodexGoalControl } from "./CodexGoalControl.ts";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
@@ -191,6 +196,9 @@ export interface CodexThreadSnapshot {
 }
 
 export interface CodexSessionRuntimeShape {
+  readonly goalControl: (
+    input: ProviderGoalControlInput,
+  ) => Effect.Effect<ProviderGoalControlResult, ProviderGoalControlError>;
   readonly start: () => Effect.Effect<ProviderSession, CodexSessionRuntimeError>;
   readonly getSession: Effect.Effect<ProviderSession>;
   readonly sendTurn: (
@@ -2318,8 +2326,16 @@ export const makeCodexSessionRuntime = (
       yield* Queue.shutdown(events);
     });
 
+    const goalMutex = yield* Semaphore.make(1);
+    const goalControl = makeCodexGoalControl({
+      ownerId: yield* randomUUIDv4("provider-event"),
+      session: Ref.get(sessionRef),
+      client,
+      mutex: goalMutex,
+    });
     return {
       start,
+      goalControl,
       getSession: Ref.get(sessionRef),
       compactThread: Effect.gen(function* () {
         const providerThreadId = yield* readProviderThreadId;
@@ -2381,7 +2397,7 @@ export const makeCodexSessionRuntime = (
               ? { resumeCursor: { threadId: resumedProviderThreadId } }
               : {}),
           } satisfies ProviderTurnStartResult;
-        }),
+        }).pipe(goalMutex.withPermit),
       interruptTurn: (turnId) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;

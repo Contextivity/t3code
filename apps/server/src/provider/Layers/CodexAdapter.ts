@@ -9,6 +9,7 @@
  */
 import {
   EventId,
+  ProviderGoalControlError,
   type CanonicalItemType,
   type CanonicalRequestType,
   type CodexSettings,
@@ -2713,6 +2714,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       promptlessTurnContinuation: true,
     },
     startSession,
+    goalControl: (input) =>
+      requireSession(input.threadId).pipe(
+        Effect.mapError(
+          () =>
+            new ProviderGoalControlError({
+              reason: "owner_unavailable",
+              message: "The owning Codex session is no longer loaded.",
+            }),
+        ),
+        Effect.flatMap((session) => session.runtime.goalControl(input)),
+      ),
     sendTurn,
     compaction: { type: "native", start: compactThread },
     interruptTurn,

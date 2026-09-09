@@ -8,6 +8,9 @@
  * @module ProviderAdapter
  */
 import type {
+  ProviderGoalControlInput,
+  ProviderGoalControlResult,
+  ProviderGoalControlError,
   ApprovalRequestId,
   ProviderApprovalDecision,
   ProviderDriverKind,
@@ -65,6 +68,10 @@ export interface ProviderThreadSnapshot {
 }
 
 export interface ProviderAdapterShape<TError> {
+  readonly goalControl?: (
+    input: ProviderGoalControlInput,
+  ) => Effect.Effect<ProviderGoalControlResult, ProviderGoalControlError>;
+
   /**
    * Provider kind implemented by this adapter.
    */

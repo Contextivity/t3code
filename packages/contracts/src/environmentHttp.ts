@@ -1,3 +1,8 @@
+import {
+  ProviderGoalControlInput,
+  ProviderGoalControlResult,
+  ProviderGoalControlError,
+} from "./providerGoal.ts";
 import * as Context from "effect/Context";
 import type * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
@@ -505,6 +510,14 @@ const EnvironmentOrchestrationThreadSnapshotQuery = {
 };
 
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
+  .add(
+    HttpApiEndpoint.post("goalControl", "/api/orchestration/goal-control", {
+      headers: OptionalBearerHeaders,
+      payload: ProviderGoalControlInput,
+      success: ProviderGoalControlResult,
+      error: [...EnvironmentOrchestrationDispatchErrors, ProviderGoalControlError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
   .add(
     HttpApiEndpoint.get("snapshot", "/api/orchestration/snapshot", {
       headers: OptionalBearerHeaders,
