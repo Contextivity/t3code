@@ -1,5 +1,6 @@
 import {
   AuthOrchestrationOperateScope,
+  ProviderGoalControlError,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
@@ -7,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
+import { ProviderService } from "../provider/Services/ProviderService.ts";
 import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
 import { cleanupFailedUploadedAttachments, normalizeDispatchCommand } from "./Normalizer.ts";
 import {
@@ -27,6 +29,25 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const orchestrationEngine = yield* OrchestrationEngineService;
 
     return handlers
+      .handle(
+        "goalControl",
+        Effect.fn("environment.orchestration.goalControl")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(
+            args.payload.action === "get"
+              ? AuthOrchestrationReadScope
+              : AuthOrchestrationOperateScope,
+          );
+          const service = yield* Effect.serviceOption(ProviderService);
+          if (Option.isNone(service) || !service.value.goalControl) {
+            return yield* new ProviderGoalControlError({
+              reason: "unsupported",
+              message: "This server does not expose native goal control.",
+            });
+          }
+          return yield* service.value.goalControl(args.payload);
+        }),
+      )
       .handle(
         "snapshot",
         Effect.fn("environment.orchestration.snapshot")(function* (args) {

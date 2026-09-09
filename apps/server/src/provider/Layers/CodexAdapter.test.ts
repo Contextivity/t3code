@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import {
   ApprovalRequestId,
+  ProviderGoalControlError,
   CodexSettings,
   EventId,
   ProviderDriverKind,
@@ -60,6 +61,13 @@ const asEventId = (value: string): EventId => EventId.make(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.make(value);
 
 class FakeCodexRuntime implements CodexSessionRuntimeShape {
+  readonly goalControl: CodexSessionRuntimeShape["goalControl"] = () =>
+    Effect.fail(
+      new ProviderGoalControlError({
+        reason: "unsupported",
+        message: "Goal control is not configured in this fixture.",
+      }),
+    );
   private readonly eventQueue = Effect.runSync(Queue.unbounded<ProviderEvent>());
   private readonly now = "2026-01-01T00:00:00.000Z";
 

@@ -49,6 +49,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
 
+import { routeGoalControl } from "./ProviderGoalControl.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
 import {
@@ -2259,6 +2260,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   return {
     startSession,
+    goalControl: routeGoalControl(directory, registry),
     sendTurn,
     compactThread,
     interruptTurn,

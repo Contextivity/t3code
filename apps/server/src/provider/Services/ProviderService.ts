@@ -12,6 +12,9 @@
  * @module ProviderService
  */
 import type {
+  ProviderGoalControlInput,
+  ProviderGoalControlResult,
+  ProviderGoalControlError,
   ProviderInterruptTurnInput,
   ProviderInstanceId,
   ProviderRespondToRequestInput,
@@ -39,6 +42,10 @@ import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
 export interface ProviderServiceShape {
+  readonly goalControl?: (
+    input: ProviderGoalControlInput,
+  ) => Effect.Effect<ProviderGoalControlResult, ProviderGoalControlError>;
+
   /**
    * Start a provider session.
    */
