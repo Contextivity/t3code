@@ -33,6 +33,7 @@ import {
   ProviderSendTurnInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Cause from "effect/Cause";
 import * as NodeCrypto from "node:crypto";
 import * as Crypto from "effect/Crypto";
 import * as Exit from "effect/Exit";
@@ -2682,11 +2683,32 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     if (session.stopped) {
       return;
     }
+    // Keep the handle in `sessions` until every owned resource has closed. A
+    // transport or scope finalizer can fail transiently; dropping the handle
+    // first made the provider tree unreachable and made a retry impossible.
+    const runtimeClose = yield* session.runtime.close.pipe(Effect.exit);
+    if (Exit.isFailure(runtimeClose)) {
+      const cause = Cause.squash(runtimeClose.cause);
+      return yield* new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "session/close",
+        detail: String(cause),
+        cause,
+      });
+    }
+    const scopeClose = yield* Scope.close(session.scope, Exit.void).pipe(Effect.exit);
+    if (Exit.isFailure(scopeClose)) {
+      const cause = Cause.squash(scopeClose.cause);
+      return yield* new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "session/scope-close",
+        detail: String(cause),
+        cause,
+      });
+    }
+    yield* Fiber.interrupt(session.eventFiber);
     session.stopped = true;
     sessions.delete(session.threadId);
-    yield* session.runtime.close.pipe(Effect.ignore);
-    yield* Effect.ignore(Scope.close(session.scope, Exit.void));
-    yield* Fiber.interrupt(session.eventFiber).pipe(Effect.ignore);
   });
 
   const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>

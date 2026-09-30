@@ -2676,6 +2676,31 @@ scopedLifecycleLayer("CodexAdapterLive scoped lifecycle", (it) => {
       NodeAssert.equal(yield* adapter.hasSession(asThreadId("thread-stop")), false);
     }),
   );
+
+  it.effect("retains a session handle when close fails so cleanup can be retried", () =>
+    Effect.gen(function* () {
+      scopedLifecycleRuntimeFactory.releasedThreadIds.length = 0;
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-stop-retry");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const runtime = scopedLifecycleRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+
+      runtime.closeImpl.mockRejectedValueOnce(new Error("transient close failure"));
+      const first = yield* adapter.stopSession(threadId).pipe(Effect.result);
+      NodeAssert.equal(first._tag, "Failure");
+      NodeAssert.equal(yield* adapter.hasSession(threadId), true);
+      NodeAssert.deepStrictEqual(scopedLifecycleRuntimeFactory.releasedThreadIds, []);
+
+      yield* adapter.stopSession(threadId);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+      NodeAssert.deepStrictEqual(scopedLifecycleRuntimeFactory.releasedThreadIds, [threadId]);
+    }),
+  );
 });
 
 const scopedFailureRuntimeFactory = makeScopedRuntimeFactory({ failConstruction: true });

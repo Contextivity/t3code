@@ -564,6 +564,7 @@ for (const [enabled, completed] of [
             const binding = yield* directory.getBinding(threadId);
             assert(Option.isSome(binding));
             markers.push(binding.value.runtimePayload);
+            codex.listSessions.mockReturnValue(Effect.succeed([]));
           }).pipe(Effect.orDie),
         );
         yield* Scope.close(scope, Exit.void);
@@ -648,7 +649,7 @@ it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
   }),
 );
 
-it.effect("ProviderServiceLive shutdown leaves settled session rows untouched", () =>
+it.effect("ProviderServiceLive shutdown leaves sessions without local ownership untouched", () =>
   Effect.gen(function* () {
     const recordedAnalytics = makeRecordingAnalytics();
     const codex = makeFakeCodexAdapter();
@@ -709,14 +710,10 @@ it.effect("ProviderServiceLive shutdown leaves settled session rows untouched", 
 
     const byThread = yield* readBindings;
     assert.deepStrictEqual(byThread.get(settledId), settledBefore);
-    for (const threadId of [runningId, stoppedWithTurnId]) {
-      const binding = byThread.get(threadId);
-      assert.equal(binding?.status, "stopped");
-      assert.propertyVal(binding?.runtimePayload, "activeTurnId", null);
-      assert.propertyVal(binding?.runtimePayload, "lastRuntimeEvent", "provider.stopAll");
-    }
+    assert.equal(byThread.get(runningId)?.status, "running");
+    assert.equal(byThread.get(stoppedWithTurnId)?.status, "stopped");
     const [stoppedAll] = recordedAnalytics.eventsByName("provider.sessions.stopped_all");
-    assert.equal(stoppedAll?.properties?.stoppedSessionCount, 2);
+    assert.equal(stoppedAll?.properties?.stoppedSessionCount, 0);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
@@ -1618,6 +1615,28 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("fails closed when the adapter no longer owns the persisted session", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-stop-without-adapter-session");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* routing.codex.stopAll();
+
+      const failure = yield* provider.stopSession({ threadId }).pipe(Effect.flip);
+      assert.instanceOf(failure, ProviderValidationError);
+      assert.include(failure.issue, "does not own an active adapter session");
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const binding = yield* directory.getBinding(threadId);
+      assert(Option.isSome(binding));
+      assert.equal(binding.value.status, "running");
+    }),
+  );
+
   it.effect.each([CODEX_DRIVER, CLAUDE_AGENT_DRIVER, CURSOR_DRIVER])(
     "rejects missing, file, and saved workspace paths before starting %s",
     (driver) =>

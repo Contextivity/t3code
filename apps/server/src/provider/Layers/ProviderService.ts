@@ -383,6 +383,7 @@ function toRuntimeStatus(session: ProviderSession): "starting" | "running" | "st
 function toRuntimePayloadFromSession(
   session: ProviderSession,
   extra?: {
+    readonly serverOwnership?: string;
     readonly modelSelection?: unknown;
     readonly continueAfterServerUpdate?: TurnId;
     readonly lastRuntimeEvent?: string;
@@ -394,6 +395,7 @@ function toRuntimePayloadFromSession(
     model: session.model ?? null,
     activeTurnId: session.activeTurnId ?? null,
     lastError: session.lastError ?? null,
+    ...(extra?.serverOwnership !== undefined ? { serverOwnership: extra.serverOwnership } : {}),
     ...(extra?.continueAfterServerUpdate !== undefined
       ? { continueAfterServerUpdate: extra.continueAfterServerUpdate }
       : {}),
@@ -427,12 +429,17 @@ function readPersistedCwd(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-/** Stopped rows with no active turn are settled; shutdown leaves them untouched. */
-function isSettledBinding(binding: ProviderSessionDirectory.ProviderRuntimeBinding): boolean {
-  if (binding.status !== "stopped") return false;
-  const payload = binding.runtimePayload;
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return true;
-  return !("activeTurnId" in payload) || payload.activeTurnId == null;
+function runtimePayloadHasOwnership(
+  payload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+  owner: string,
+): boolean {
+  return (
+    payload !== null &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    "serverOwnership" in payload &&
+    payload.serverOwnership === owner
+  );
 }
 
 const dieOnMissingBindingInstanceId = (
@@ -511,6 +518,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   });
   let turnAnalyticsRequestId = 0;
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+  // This token fences shutdown writes to sessions admitted by this server
+  // process. Provider instance ids are configuration identities and can be
+  // shared by multiple server processes, so they are not an ownership fence.
+  const serverOwnership = `t3-server:${process.pid}:${DateTime.toEpochMillis(yield* DateTime.now)}`;
 
   const finishTurnAnalytics = (
     state: TurnAnalyticsState,
@@ -1080,7 +1091,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         runtimeMode: session.runtimeMode,
         status: toRuntimeStatus(session),
         ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
-        runtimePayload: toRuntimePayloadFromSession(session, extra),
+        runtimePayload: toRuntimePayloadFromSession(session, {
+          ...extra,
+          serverOwnership,
+        }),
       });
     });
 
@@ -1767,6 +1781,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         runtimePayload: {
           ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
           activeTurnId: turn.turnId,
+          serverOwnership,
           // Admission and marker consumption must survive the same restart.
           continueAfterServerUpdate: null,
           continueAfterServerUpdatePrepared: null,
@@ -2059,18 +2074,26 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.kind": routed.adapter.provider,
           "provider.thread_id": input.threadId,
         });
-        if (routed.isActive) {
-          const session = (yield* routed.adapter.listSessions()).find(
-            (session) => session.threadId === routed.threadId,
+        if (!routed.isActive) {
+          return yield* toValidationError(
+            "ProviderService.stopSession",
+            `Cannot stop thread '${input.threadId}' because this server does not own an active adapter session.`,
           );
-          if (session) {
-            yield* upsertSessionBinding(
-              { ...session, providerInstanceId: routed.instanceId },
-              input.threadId,
-            );
-          }
-          yield* routed.adapter.stopSession(routed.threadId);
         }
+        const session = (yield* routed.adapter.listSessions()).find(
+          (session) => session.threadId === routed.threadId,
+        );
+        if (!session) {
+          return yield* toValidationError(
+            "ProviderService.stopSession",
+            `Cannot stop thread '${input.threadId}' because the adapter no longer exposes an owned session.`,
+          );
+        }
+        yield* upsertSessionBinding(
+          { ...session, providerInstanceId: routed.instanceId },
+          input.threadId,
+        );
+        yield* routed.adapter.stopSession(routed.threadId);
         const pendingCompaction = pendingCompactions.get(input.threadId);
         if (pendingCompaction !== undefined) {
           yield* settleCompaction(input.threadId, pendingCompaction, "turn.aborted");
@@ -2085,6 +2108,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           status: "stopped",
           runtimePayload: {
             activeTurnId: null,
+            serverOwnership,
             continueAfterServerUpdate: null,
             continueAfterServerUpdatePrepared: null,
           },
@@ -2372,34 +2396,51 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     yield* McpSessionRegistry.revokeAllActiveMcpCredentials();
     McpProviderSession.clearAllMcpProviderSessions();
     // Stopped rows stay for their resume cursors, so long-lived installs hold
-    // thousands. Only rewrite the ones this shutdown actually stops.
-    const bindings = yield* directory.listBindings().pipe(
-      Effect.map((all) => all.filter((binding) => !isSettledBinding(binding))),
-      Effect.orElseSucceed(() => []),
+    // thousands. Only rewrite sessions observed on an adapter owned by this
+    // server, and fence the write with the ownership token recorded above.
+    const remainingByThread = new Set<ThreadId>();
+    const remaining = yield* Effect.forEach(
+      currentAdapters,
+      ([, adapter]) => adapter.listSessions(),
+      {
+        concurrency: 1,
+      },
+    ).pipe(Effect.map((sessionsByAdapter) => sessionsByAdapter.flat()));
+    for (const session of remaining) remainingByThread.add(session.threadId);
+    const bindings = yield* Effect.forEach(
+      activeSessions,
+      (session) =>
+        Effect.gen(function* () {
+          if (remainingByThread.has(session.threadId)) return false;
+          const binding = Option.getOrUndefined(yield* directory.getBinding(session.threadId));
+          if (!binding || !runtimePayloadHasOwnership(binding.runtimePayload, serverOwnership)) {
+            return false;
+          }
+          const providerInstanceId = dieOnMissingBindingInstanceId(
+            "ProviderService.stopAll",
+            binding,
+          );
+          if (providerInstanceId !== session.providerInstanceId) return false;
+          yield* directory.upsert({
+            threadId: session.threadId,
+            provider: session.provider,
+            providerInstanceId,
+            status: "stopped",
+            runtimePayload: {
+              activeTurnId: null,
+              serverOwnership,
+              lastRuntimeEvent: "provider.stopAll",
+              lastRuntimeEventAt: yield* nowIso,
+            },
+          });
+          return true;
+        }),
+      { discard: false },
     );
-    yield* Effect.forEach(bindings, (binding) =>
-      Effect.gen(function* () {
-        const providerInstanceId = dieOnMissingBindingInstanceId(
-          "ProviderService.stopAll",
-          binding,
-        );
-        return yield* directory.upsert({
-          threadId: binding.threadId,
-          provider: binding.provider,
-          providerInstanceId,
-          status: "stopped",
-          runtimePayload: {
-            activeTurnId: null,
-            lastRuntimeEvent: "provider.stopAll",
-            lastRuntimeEventAt: yield* nowIso,
-          },
-        });
-      }),
-    ).pipe(Effect.asVoid);
     // Not `sessionCount`: that older property counted every row, so a new name
     // keeps the two meanings in separate series.
     yield* analytics.record("provider.sessions.stopped_all", {
-      stoppedSessionCount: bindings.length,
+      stoppedSessionCount: bindings.filter(Boolean).length,
     });
     yield* analytics.flush;
   });
