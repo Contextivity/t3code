@@ -21,6 +21,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as SqlError from "effect/sql/SqlError";
 
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
 import * as CheckpointService from "./CheckpointService.ts";
@@ -376,6 +377,74 @@ it.effect("requeues a claim when a pre-execution worker check fails", () =>
     assert.equal(retry.workerId, workerId);
     assert.equal(retry.delayMs, 0);
     assert.include(retry.error, "simulated cancellation-state read failure");
+  }),
+);
+
+it.effect("keeps requeueing a failed claim while the database is locked", () =>
+  Effect.gen(function* () {
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const effectId = "effect:worker-requeue-lock-timeout";
+    const workerId = "worker-requeue-lock-timeout";
+    const claimedEffect: EffectOutbox.OrchestrationEffectV2 = {
+      id: effectId,
+      commandId: CommandId.make("command:worker-requeue-lock-timeout"),
+      threadId,
+      request: { type: "provider-runtime.continue", sourceRunId: runId },
+      status: "running",
+      attemptCount: 1,
+      availableAt: now,
+      leaseOwner: workerId,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+      lastError: null,
+    };
+    const lockedWrites = yield* Ref.make(3);
+    const requeued = yield* Ref.make(false);
+    const layerOutbox = Layer.mock(EffectOutbox.EffectOutboxV2)({
+      claimNext: () => Effect.succeedSome(claimedEffect),
+      get: () => Effect.succeedSome(claimedEffect),
+      awaitCancellation: () => Effect.never,
+      clearCancellation: () => Effect.void,
+      retry: () =>
+        Effect.gen(function* () {
+          if ((yield* Ref.getAndUpdate(lockedWrites, (count) => count - 1)) > 0) {
+            return yield* new EffectOutbox.EffectOutboxError({
+              operation: "retry",
+              effectId,
+              cause: new SqlError.SqlError({
+                reason: new SqlError.LockTimeoutError({ cause: null }),
+              }),
+            });
+          }
+          yield* Ref.set(requeued, true);
+          return true;
+        }),
+    });
+    const layerExecutor = Layer.succeed(
+      EffectWorker.OrchestrationEffectExecutorV2,
+      EffectWorker.OrchestrationEffectExecutorV2.of({
+        execute: () =>
+          Effect.fail(
+            new EffectWorker.OrchestrationEffectExecutionError({
+              effectId,
+              effectType: "provider-runtime.continue",
+              cause: "simulated database is locked",
+            }),
+          ),
+      }),
+    );
+    const layerWorker = EffectWorker.layerWithOptions({ workerId }).pipe(
+      Layer.provide(Layer.merge(layerOutbox, layerExecutor)),
+    );
+
+    yield* EffectWorker.OrchestrationEffectWorkerV2.pipe(
+      Effect.flatMap((worker) => worker.runOnce),
+      Effect.provide(layerWorker),
+      Effect.exit,
+    );
+
+    assert.isTrue(yield* Ref.get(requeued));
   }),
 );
 

@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as SqlError from "effect/sql/SqlError";
 
 import {
   increment,
@@ -596,6 +597,13 @@ export class OrchestrationEffectWorkerError extends Schema.TaggedError<Orchestra
 
 const isOrchestrationEffectWorkerError = Schema.is(OrchestrationEffectWorkerError);
 
+// Only the claiming worker settles its row, and a running row blocks every later effect on its
+// thread until the server restarts. Each lock timeout has already waited out busy_timeout.
+const isLockTimeout = (error: EffectOutbox.EffectOutboxError) =>
+  SqlError.isSqlError(error.cause) && error.cause.reason._tag === "LockTimeoutError";
+const retryWhileLocked = <A>(settlement: Effect.Effect<A, EffectOutbox.EffectOutboxError>) =>
+  Effect.retry(settlement, { while: isLockTimeout });
+
 export interface OrchestrationEffectWorkerV2Shape {
   readonly awaitWork: Effect.Effect<void>;
   readonly runOnce: Effect.Effect<boolean, OrchestrationEffectWorkerError>;
@@ -654,6 +662,7 @@ export const layerWithOptions = (
                 delayMs: 0,
               })
               .pipe(
+                retryWhileLocked,
                 Effect.flatMap((requeued) =>
                   requeued
                     ? Effect.logWarning("Requeued effect after unexpected worker failure", {
@@ -685,6 +694,7 @@ export const layerWithOptions = (
             error: `Worker failed to settle a process-bound effect after execution started: ${Cause.pretty(cause)}`,
           })
           .pipe(
+            retryWhileLocked,
             Effect.flatMap((failed) =>
               failed
                 ? Effect.logError("Terminalized process-bound effect after settlement failure", {
