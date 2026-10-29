@@ -7565,7 +7565,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const parentRun = parentProjection.runs.find(
       (candidate) => candidate.id === command.parentRunId,
     );
-    if (parentRun === undefined || !isBlockingRun(parentRun) || parentRun.rootNodeId === null) {
+    const followUpOwner =
+      command.followUp === true
+        ? (parentProjection.runs
+            .filter(isBlockingRun)
+            .toSorted((a, b) => b.ordinal - a.ordinal)[0] ??
+          latestExecutedRun(parentProjection.runs))
+        : undefined;
+    if (
+      parentRun === undefined ||
+      parentRun.rootNodeId === null ||
+      (command.followUp === true ? parentRun.id !== followUpOwner?.id : !isBlockingRun(parentRun))
+    ) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
         commandType: command.type,

@@ -392,6 +392,10 @@ describe("orchestrator MCP toolkit", () => {
           const runningFollowup = yield* decodeThreadSendResult(
             runningFollowupCall.structuredContent,
           ).pipe(Effect.orDie);
+          expect(runningFollowup.taskId).toBeDefined();
+          expect(Object.keys(runningFollowup).sort()).toEqual(
+            ["threadId", "link", "messageId", "runId", "taskId", "status", "delivery"].sort(),
+          );
           yield* orchestrator
             .streamStoredEventsFrom({
               threadId: localChild(delegated.childThreadId),

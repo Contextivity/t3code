@@ -3361,6 +3361,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("delegated_task.remote.request"),
     commandId: CommandId,
+    followUp: Schema.optional(Schema.Literal(true)),
     parentThreadId: ThreadId,
     parentRunId: RunId,
     parentNodeId: NodeId,

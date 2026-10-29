@@ -309,7 +309,9 @@ const makeLaptop = Effect.gen(function* () {
         Layer.mock(ProjectService.ProjectService)({}),
         Layer.mock(SecretRequests.SecretRequests)({}),
         ServerSettings.layerTest(),
-        Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+        Layer.mock(RemoteDelegation.RemoteDelegation)({
+          trackSend: (_scope, _environmentId, _input, result) => Effect.succeed(result),
+        }),
         Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
       ),
     ),

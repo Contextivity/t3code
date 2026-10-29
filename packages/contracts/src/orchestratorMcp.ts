@@ -515,6 +515,10 @@ export const OrchestratorMcpThreadSendResult = Schema.Struct({
   taskId: Schema.optional(NodeId),
   status: OrchestrationV2RunStatus,
   delivery: Schema.Literals(["started", "queued", "steered", "restarted"]),
+  tracked: Schema.optional(Schema.Boolean),
+  untrackedReason: Schema.optional(
+    Schema.Literals(["queued", "steered", "restarted", "no_sending_thread", "sender_has_no_run"]),
+  ),
 });
 export type OrchestratorMcpThreadSendResult = typeof OrchestratorMcpThreadSendResult.Type;
 

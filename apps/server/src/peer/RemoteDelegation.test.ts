@@ -7,6 +7,7 @@ import {
   EventId,
   MessageId,
   NodeId,
+  type OrchestratorMcpThreadSendResult,
   type OrchestrationV2Run,
   ProjectId,
   ProviderDriverKind,
@@ -125,8 +126,10 @@ interface BoxThread {
   readonly releaseStop: Deferred.Deferred<void>;
   /** Messages sent to the thread there after its launch, each starting a later run. */
   readonly sent: Ref.Ref<ReadonlyArray<string>>;
+  readonly sendDelivery: Ref.Ref<OrchestratorMcpThreadSendResult["delivery"]>;
   /** Runs as the launch there is answered, before the laptop hears back. */
   readonly afterLaunch: Ref.Ref<Effect.Effect<void>>;
+  readonly afterSend: Ref.Ref<Effect.Effect<void>>;
 }
 
 const makeBoxThread = Effect.gen(function* () {
@@ -160,7 +163,9 @@ const makeBoxThread = Effect.gen(function* () {
     stopStarted: yield* Deferred.make<void>(),
     releaseStop: yield* Deferred.make<void>(),
     sent: yield* Ref.make<ReadonlyArray<string>>([]),
+    sendDelivery: yield* Ref.make<OrchestratorMcpThreadSendResult["delivery"]>("started"),
     afterLaunch: yield* Ref.make<Effect.Effect<void>>(Effect.void),
+    afterSend: yield* Ref.make<Effect.Effect<void>>(Effect.void),
   } satisfies BoxThread;
 });
 
@@ -207,6 +212,7 @@ const boxLaterRunId = RunId.make("run:box-later");
 const boxToolkitLayer = (thread: BoxThread) => {
   const runId = boxRunId;
   const interrupts = new Set<string>();
+  const sends = new Map<CommandId, ThreadManagement.ThreadManagementSendResult>();
   const shellOf = (threadId: ThreadId) =>
     Effect.gen(function* () {
       if ((yield* Ref.get(thread.launched)) !== threadId) return null;
@@ -292,7 +298,7 @@ const boxToolkitLayer = (thread: BoxThread) => {
         return {
           threadId: input.threadId,
           run: {
-            id: later ? boxLaterRunId : runId,
+            id: later || input.runId === boxLaterRunId ? boxLaterRunId : runId,
             status: later ? "completed" : yield* Ref.get(thread.status),
           } as OrchestrationV2Run,
           timedOut: Option.isNone(done),
@@ -410,12 +416,18 @@ const boxToolkitLayer = (thread: BoxThread) => {
         : Effect.die(`The box does not expect ${command.type}`),
     stopDelegatedTasks: (input) => recordStop(input.commandId, "delegated-tasks"),
     sendToThread: (input) =>
-      Ref.update(thread.sent, (seen) => [...seen, input.text]).pipe(
-        Effect.as({
+      Effect.gen(function* () {
+        const replay = sends.get(input.commandId);
+        if (replay !== undefined) return replay;
+        yield* Ref.update(thread.sent, (seen) => [...seen, input.text]);
+        const result = {
           run: { id: boxLaterRunId, status: "running" },
-          delivery: "started",
-        } as never),
-      ),
+          delivery: yield* Ref.get(thread.sendDelivery),
+        } as ThreadManagement.ThreadManagementSendResult;
+        sends.set(input.commandId, result);
+        yield* Effect.flatten(Ref.get(thread.afterSend));
+        return result;
+      }),
   });
   const layerBoxLaunches = Layer.mock(ThreadLaunch.ThreadLaunchService)({
     launch: (input) =>
@@ -635,6 +647,13 @@ const parentScope: McpInvocationContext.McpInvocationScope = {
   issuedAt: 1,
 };
 
+const clientScope: McpInvocationContext.McpInvocationScope = {
+  ...parentScope,
+  requestNamespace: "client:external",
+  thread: undefined,
+  client: { sessionId: "session:external", label: "External client", access: "full-access" },
+};
+
 /** The laptop's parent thread, mid-turn when its agent delegates. */
 const seedParent = (laptopEnv: Effect.Success<ReturnType<typeof makeLaptop>>) =>
   Effect.gen(function* () {
@@ -786,6 +805,174 @@ const taskResult = (laptopEnv: Effect.Success<ReturnType<typeof makeLaptop>>, ta
           : undefined,
       ),
     );
+
+it.effect.each(["complete", "cancel", "background", "stopped"] as const)(
+  "a remote send that starts a run records one task and supports %s",
+  (outcome) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const thread = yield* makeBoxThread;
+        const b = yield* serveBox(thread);
+        const offers = yield* SubscriptionRef.make<
+          ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
+        >([]);
+        const database = yield* SqlitePersistence.layerMemory.pipe(Layer.build);
+        const a = yield* makeLaptop(database, offers);
+        yield* linkTo(a.links, b, "full-access");
+        yield* seedParent(a);
+        if (outcome === "background") {
+          const now = yield* DateTime.now;
+          const parent = yield* a.orchestrator.getThreadProjection(parentThreadId);
+          yield* a.sink.write({
+            commandId: CommandId.make("command:parent-background"),
+            events: [
+              {
+                id: EventId.make("event:parent-background"),
+                type: "provider-thread.updated",
+                threadId: parentThreadId,
+                occurredAt: now,
+                payload: {
+                  ...parent.providerThreads[0]!,
+                  pendingBackgroundTasks: [{ taskId: "native-agent", kind: "subagent" }],
+                  updatedAt: now,
+                },
+              },
+              {
+                id: EventId.make("event:parent-ended"),
+                type: "run.updated",
+                threadId: parentThreadId,
+                runId: parentRunId,
+                occurredAt: now,
+                payload: { ...parent.runs[0]!, status: "completed", completedAt: now },
+              },
+            ],
+          });
+        }
+        const threadId = ThreadId.make("thread:existing-remote");
+        yield* Ref.set(thread.launched, threadId);
+        const input = {
+          environmentId: box.environmentId,
+          threadId,
+          message: "Run the next check.",
+          mode: "auto",
+          clientRequestId: "send-next-check",
+        };
+        if (outcome === "stopped") {
+          yield* Ref.set(
+            thread.afterSend,
+            a.orchestrator
+              .dispatch({
+                type: "thread.stop",
+                threadId: parentThreadId,
+                commandId: CommandId.make("command:stop-during-send"),
+              })
+              .pipe(Effect.asVoid, Effect.orDie),
+          );
+        }
+        const first = yield* a.call("t3_thread_send", input);
+        if (outcome === "stopped") {
+          expect(first.isError).toBe(true);
+          expect(JSON.stringify(first.content)).toContain("same clientRequestId");
+          expect(yield* Ref.get(thread.sent)).toEqual([input.message]);
+          expect(yield* Ref.get(thread.stops)).toEqual([]);
+          expect((yield* a.orchestrator.getThreadProjection(parentThreadId)).subagents).toEqual([]);
+          return;
+        }
+        expect(first.isError, JSON.stringify(first.content)).toBe(false);
+        const sent = first.structuredContent as OrchestratorMcpThreadSendResult;
+        expect(sent.taskId).toBeDefined();
+        expect(sent).toMatchObject({ delivery: "started", runId: boxLaterRunId, tracked: true });
+        const retried = yield* a.call("t3_thread_send", input);
+        expect(retried.structuredContent).toEqual(sent);
+        expect(yield* Ref.get(thread.sent)).toEqual([input.message]);
+        expect((yield* a.orchestrator.getThreadProjection(parentThreadId)).subagents).toHaveLength(
+          1,
+        );
+        const running = yield* a.call("task_status", { taskId: sent.taskId });
+        expect(running.structuredContent).toMatchObject({
+          status: "running",
+          remoteChild: { environmentId: box.environmentId, threadId },
+        });
+        if (outcome === "cancel") {
+          const cancelled = yield* a.call("task_cancel", {
+            taskId: sent.taskId,
+            clientRequestId: "cancel-next-check",
+          });
+          expect(cancelled.structuredContent).toEqual({
+            taskId: sent.taskId,
+            status: "cancel_requested",
+          });
+          expect(yield* Ref.get(thread.stops)).toEqual(["thread.stop", "delegated-tasks"]);
+        } else {
+          yield* Ref.set(thread.reply, "The previous run's answer.");
+          yield* Ref.set(thread.laterReply, "The next check passed.");
+          yield* Ref.set(thread.status, "completed");
+          yield* Deferred.succeed(thread.finished, undefined);
+        }
+        const task = yield* taskResult(a, sent.taskId!);
+        expect(task).toMatchObject({
+          status: outcome === "cancel" ? "cancelled" : "completed",
+          result: outcome === "cancel" ? "Cancelled." : "The next check passed.",
+        });
+        yield* SubscriptionRef.changes(offers).pipe(
+          Stream.filter((seen) => seen.some((offer) => offer.threadId === parentThreadId)),
+          Stream.runHead,
+        );
+        const parent = yield* a.orchestrator.getThreadProjection(parentThreadId);
+        expect(
+          parent.runs.find((run) => run.id === parentRunId)?.delegatedCompletion?.delivery?.taskIds,
+        ).toEqual([sent.taskId]);
+        expect((yield* Ref.get(thread.waitedFor)).every((runId) => runId === boxLaterRunId)).toBe(
+          true,
+        );
+        const status = yield* a.call("task_status", { taskId: sent.taskId });
+        expect(status.structuredContent).toMatchObject({
+          status: task!.status,
+          summary: task!.result,
+        });
+        const replayed = yield* a.call("t3_thread_send", input);
+        expect(replayed.structuredContent).toEqual(sent);
+        expect(yield* SubscriptionRef.get(offers)).toHaveLength(1);
+        expect((yield* a.orchestrator.getThreadProjection(parentThreadId)).subagents).toHaveLength(
+          1,
+        );
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect.each(["steered", "queued", "restarted"] as const)(
+  "a remote send delivered as %s reports that it is not tracked",
+  (delivery) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const thread = yield* makeBoxThread;
+        const b = yield* serveBox(thread);
+        const offers = yield* SubscriptionRef.make<
+          ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
+        >([]);
+        const database = yield* SqlitePersistence.layerMemory.pipe(Layer.build);
+        const a = yield* makeLaptop(database, offers);
+        yield* linkTo(a.links, b, "full-access");
+        yield* seedParent(a);
+        const threadId = ThreadId.make("thread:existing-remote");
+        yield* Ref.set(thread.launched, threadId);
+        yield* Ref.set(thread.sendDelivery, delivery);
+        const result = yield* a.call("t3_thread_send", {
+          environmentId: box.environmentId,
+          threadId,
+          message: "Update the check.",
+        });
+        expect(result.isError, JSON.stringify(result.content)).toBe(false);
+        expect(result.structuredContent).toMatchObject({
+          delivery,
+          tracked: false,
+          untrackedReason: delivery,
+        });
+        expect(result.structuredContent).not.toHaveProperty("taskId");
+        expect((yield* a.orchestrator.getThreadProjection(parentThreadId)).subagents).toEqual([]);
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
 
 it.effect("a task delegated to the box wakes the laptop's parent when it ends there", () =>
   Effect.scoped(
@@ -1506,13 +1693,21 @@ it.effect("stopping the parent stops follow-up work on a task there that has its
         result: "All green.",
       });
 
-      // The parent sends the thread there a follow-up, which starts a run there.
-      const sent = yield* a.call("t3_thread_send", {
-        environmentId: box.environmentId,
-        threadId: delegated.remoteChild.threadId,
-        message: "Now run the slow suite too.",
-      });
+      // Another client starts follow-up work on the finished task's thread.
+      const sent = yield* a.call(
+        "t3_thread_send",
+        {
+          environmentId: box.environmentId,
+          threadId: delegated.remoteChild.threadId,
+          message: "Now run the slow suite too.",
+        },
+        clientScope,
+      );
       expect(sent.isError, JSON.stringify(sent.content)).toBe(false);
+      expect(sent.structuredContent).toMatchObject({
+        tracked: false,
+        untrackedReason: "no_sending_thread",
+      });
       expect(yield* Ref.get(thread.sent)).toEqual(["Now run the slow suite too."]);
       expect(yield* Ref.get(thread.interrupted)).toBe(0);
 
@@ -1563,11 +1758,15 @@ it.effect("a delayed Stop acknowledgement leaves a newer Stop owed", () =>
       });
       yield* Deferred.await(thread.stopStarted);
       // Work starts after the first Stop landed there, but before its acknowledgement returns.
-      yield* a.call("t3_thread_send", {
-        environmentId: box.environmentId,
-        threadId: delegated.remoteChild.threadId,
-        message: "Run another check.",
-      });
+      yield* a.call(
+        "t3_thread_send",
+        {
+          environmentId: box.environmentId,
+          threadId: delegated.remoteChild.threadId,
+          message: "Run another check.",
+        },
+        clientScope,
+      );
       yield* a.threads.stopDelegatedTasks({
         threadId: parentThreadId,
         commandId: CommandId.make("command:stop:delayed-second"),

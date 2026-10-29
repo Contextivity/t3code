@@ -43,10 +43,11 @@ const refuseOutsideConstruction = (token: symbol) => {
   }
 };
 
-let declare: <P, A, E, R>(
+let declare: <P, A, E, R, EX = never, RX = never>(
   handle: (params: P) => Effect.Effect<A, E, R>,
   remote: RemoteCheck<P> | undefined,
-) => Declaration<(params: P) => Effect.Effect<A, E, R>>;
+  forwarded?: (params: P, result: A, environmentId: EnvironmentId) => Effect.Effect<A, EX, RX>,
+) => Declaration<(params: P) => Effect.Effect<A, E | EX, R | RX>>;
 
 /**
  * What a call bound for a linked environment checks here before it goes: the
@@ -57,6 +58,7 @@ type RemoteCheck<P> = (
   params: P,
 ) => Effect.Effect<unknown, OrchestratorMcpFailure, Effect.Services<typeof writingCaller>>;
 let remoteCheckOf: <Handler>(declaration: Declaration<Handler>) => RemoteCheck<never> | undefined;
+let forwardedHandlerOf: <Handler>(declaration: Declaration<Handler>) => unknown;
 
 type CheckedHandlerOf<D> = D extends Declaration<infer Handler> ? Handler : never;
 
@@ -74,19 +76,23 @@ let handlersLayer: <Tools extends Record<string, Tool.Any>, EX, RX>(
 export class Declaration<out Handler> {
   readonly #handle: Handler;
   readonly #remote: RemoteCheck<never> | undefined;
+  readonly #forwarded: unknown;
   private constructor(
     token: typeof builtHere,
     handle: Handler,
     remote: RemoteCheck<never> | undefined,
+    forwarded: unknown,
   ) {
     refuseOutsideConstruction(token);
     this.#handle = handle;
     this.#remote = remote;
+    this.#forwarded = forwarded;
   }
   static {
-    declare = (handle, remote) => new Declaration(builtHere, handle, remote);
+    declare = (handle, remote, forwarded) => new Declaration(builtHere, handle, remote, forwarded);
     checkedHandler = Struct.lambda<CheckedHandler>((declaration) => declaration.#handle);
     remoteCheckOf = (declaration) => declaration.#remote;
+    forwardedHandlerOf = (declaration) => declaration.#forwarded;
   }
 }
 
@@ -173,9 +179,10 @@ export const writesWithCapability = <P, A, E, R>(handle: (params: P) => Effect.E
     () => writingCaller,
   );
 
-export const writesThreads = <P, A, E, R>(
+export const writesThreads = <P, A, E, R, EX = never, RX = never>(
   threads: (params: P) => ReadonlyArray<ThreadId | undefined>,
   handle: (params: P) => Effect.Effect<A, E, R>,
+  forwarded?: (params: P, result: A, environmentId: EnvironmentId) => Effect.Effect<A, EX, RX>,
 ) =>
   declare(
     (params: P) =>
@@ -205,6 +212,7 @@ export const writesThreads = <P, A, E, R>(
         );
       }),
     () => writingCaller,
+    forwarded,
   );
 
 const escalationDenied = (refusal: DispatchModeRefusal) =>
@@ -391,6 +399,13 @@ const routed = Effect.fn("McpToolAccess.routed")(function* <Tools extends Record
       return yield* Effect.die(
         `${name} takes a linked environment, but it acts as its calling thread, which is here.`,
       );
+    const forwarded = forwardedHandlerOf(declaration) as
+      | ((
+          params: object,
+          result: unknown,
+          environmentId: EnvironmentId,
+        ) => Effect.Effect<unknown, Tool.Failure<Tools[keyof Tools]>>)
+      | undefined;
     const here = handlers[name] as (
       params: object,
     ) => Effect.Effect<unknown, Tool.Failure<Tools[keyof Tools]>>;
@@ -402,7 +417,11 @@ const routed = Effect.fn("McpToolAccess.routed")(function* <Tools extends Record
         if (scope.linkedEnvironments === false) return yield* PeerForwarding.linkedEnvironmentsOff;
         yield* (remote as RemoteCheck<typeof params>)(params);
         if (Option.isNone(forwarding)) return yield* linksUnavailable;
-        return yield* forwarding.value.call(scope, tool, target, { ...params, environmentId });
+        const result = yield* forwarding.value.call(scope, tool, target, {
+          ...params,
+          environmentId,
+        });
+        return forwarded === undefined ? result : yield* forwarded(params, result, target);
       });
   }
   return handlers as Toolkit.HandlersFrom<Tools>;
