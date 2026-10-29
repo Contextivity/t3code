@@ -127,6 +127,7 @@ interface BoxThread {
   /** Messages sent to the thread there after its launch, each starting a later run. */
   readonly sent: Ref.Ref<ReadonlyArray<string>>;
   readonly sendDelivery: Ref.Ref<OrchestratorMcpThreadSendResult["delivery"]>;
+  readonly queuedTail: Ref.Ref<boolean>;
   /** Runs as the launch there is answered, before the laptop hears back. */
   readonly afterLaunch: Ref.Ref<Effect.Effect<void>>;
   readonly afterSend: Ref.Ref<Effect.Effect<void>>;
@@ -164,6 +165,7 @@ const makeBoxThread = Effect.gen(function* () {
     releaseStop: yield* Deferred.make<void>(),
     sent: yield* Ref.make<ReadonlyArray<string>>([]),
     sendDelivery: yield* Ref.make<OrchestratorMcpThreadSendResult["delivery"]>("started"),
+    queuedTail: yield* Ref.make(false),
     afterLaunch: yield* Ref.make<Effect.Effect<void>>(Effect.void),
     afterSend: yield* Ref.make<Effect.Effect<void>>(Effect.void),
   } satisfies BoxThread;
@@ -208,6 +210,7 @@ const serveBox = (thread: BoxThread) => {
 
 const boxRunId = RunId.make("run:box");
 const boxLaterRunId = RunId.make("run:box-later");
+const boxQueuedRunId = RunId.make("run:box-queued");
 
 const boxToolkitLayer = (thread: BoxThread) => {
   const runId = boxRunId;
@@ -293,6 +296,14 @@ const boxToolkitLayer = (thread: BoxThread) => {
               : {}),
           };
         }
+        if (input.untilDelegatedWorkSettled === true && (yield* Ref.get(thread.queuedTail))) {
+          return {
+            threadId: input.threadId,
+            run: { id: boxLaterRunId, status: "completed" } as OrchestrationV2Run,
+            resultRun: { id: boxQueuedRunId, status: "completed" } as OrchestrationV2Run,
+            timedOut: false,
+          };
+        }
         // Unpinned, a wait reports the latest run: a later one once there is one.
         const later = input.runId === undefined && (yield* Ref.get(thread.laterReply)) !== null;
         return {
@@ -316,6 +327,16 @@ const boxToolkitLayer = (thread: BoxThread) => {
         const laterError = yield* Ref.get(thread.laterError);
         // One item per page, with errors available only in the activity view.
         const replies = [
+          ...((yield* Ref.get(thread.queuedTail))
+            ? [
+                {
+                  id: TurnItemId.make("item:queued-reply"),
+                  runId: boxQueuedRunId,
+                  text: "An unrelated queued run's answer.",
+                  type: "assistant_message",
+                },
+              ]
+            : []),
           ...(reply === null
             ? []
             : [
@@ -806,7 +827,7 @@ const taskResult = (laptopEnv: Effect.Success<ReturnType<typeof makeLaptop>>, ta
       ),
     );
 
-it.effect.each(["complete", "cancel", "background", "stopped"] as const)(
+it.effect.each(["complete", "cancel", "background", "stopped", "queued-tail"] as const)(
   "a remote send that starts a run records one task and supports %s",
   (outcome) =>
     Effect.scoped(
@@ -850,6 +871,7 @@ it.effect.each(["complete", "cancel", "background", "stopped"] as const)(
         }
         const threadId = ThreadId.make("thread:existing-remote");
         yield* Ref.set(thread.launched, threadId);
+        yield* Ref.set(thread.queuedTail, outcome === "queued-tail");
         const input = {
           environmentId: box.environmentId,
           threadId,

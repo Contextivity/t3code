@@ -838,6 +838,8 @@ export const OrchestrationV2RemoteTaskChild = Schema.Struct({
   label: Schema.String,
   /** The run there that carries the task; absent on tasks recorded before it was kept. */
   runId: Schema.optional(RunId),
+  /** A send follows its accepted run independently of later work on the thread. */
+  completionScope: Schema.optional(Schema.Literal("run")),
   /**
    * Nothing is left to stop there: a stop reached it, was refused for good, or the thread
    * or link is gone. A run ending there by itself sets it too, unless the task here was

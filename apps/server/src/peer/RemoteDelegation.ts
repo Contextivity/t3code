@@ -288,6 +288,7 @@ const make = Effect.gen(function* () {
           environmentId,
           threadId: result.threadId,
           runId: result.runId,
+          completionScope: "run",
           label: link?.label ?? environmentId,
         },
         completionWake: "always",
@@ -682,10 +683,8 @@ const make = Effect.gen(function* () {
         threadId: remote.threadId,
         ...(remote.runId === undefined ? {} : { runId: remote.runId }),
         timeoutMs: FOLLOW_WAIT_MS,
-        // A thread there whose run ended may still be waiting on its own
-        // tasks to wake it for the answer, which a task here waits for too.
-        // An older peer ignores this and reports the run alone.
-        untilDelegatedWorkSettled: true,
+        // A delegation waits for the thread's own tasks; a send follows only its accepted run.
+        untilDelegatedWorkSettled: remote.completionScope !== "run",
       })
       .pipe(Effect.raceFirst(endedHere));
     // The next look reads the result and stops it there.
