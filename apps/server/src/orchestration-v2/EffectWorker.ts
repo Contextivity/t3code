@@ -8,6 +8,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as SqlError from "effect/sql/SqlError";
 
@@ -598,11 +599,14 @@ export class OrchestrationEffectWorkerError extends Schema.TaggedError<Orchestra
 const isOrchestrationEffectWorkerError = Schema.is(OrchestrationEffectWorkerError);
 
 // Only the claiming worker settles its row, and a running row blocks every later effect on its
-// thread until the server restarts. Each lock timeout has already waited out busy_timeout.
+// thread until the server restarts. onError masks interruption, so retries must restore it.
 const isLockTimeout = (error: EffectOutbox.EffectOutboxError) =>
   SqlError.isSqlError(error.cause) && error.cause.reason._tag === "LockTimeoutError";
+const lockRetrySchedule = Schedule.spaced(Duration.millis(100));
 const retryWhileLocked = <A>(settlement: Effect.Effect<A, EffectOutbox.EffectOutboxError>) =>
-  Effect.retry(settlement, { while: isLockTimeout });
+  Effect.interruptible(
+    Effect.retry(settlement, { schedule: lockRetrySchedule, while: isLockTimeout }),
+  );
 
 export interface OrchestrationEffectWorkerV2Shape {
   readonly awaitWork: Effect.Effect<void>;

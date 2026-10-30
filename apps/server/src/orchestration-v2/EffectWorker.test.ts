@@ -16,12 +16,15 @@ import {
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as SqlError from "effect/sql/SqlError";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
 import * as CheckpointService from "./CheckpointService.ts";
@@ -401,6 +404,7 @@ it.effect("keeps requeueing a failed claim while the database is locked", () =>
     };
     const lockedWrites = yield* Ref.make(3);
     const requeued = yield* Ref.make(false);
+    const firstLockTimeout = yield* Deferred.make<void>();
     const layerOutbox = Layer.mock(EffectOutbox.EffectOutboxV2)({
       claimNext: () => Effect.succeedSome(claimedEffect),
       get: () => Effect.succeedSome(claimedEffect),
@@ -409,6 +413,7 @@ it.effect("keeps requeueing a failed claim while the database is locked", () =>
       retry: () =>
         Effect.gen(function* () {
           if ((yield* Ref.getAndUpdate(lockedWrites, (count) => count - 1)) > 0) {
+            yield* Deferred.succeed(firstLockTimeout, undefined);
             return yield* new EffectOutbox.EffectOutboxError({
               operation: "retry",
               effectId,
@@ -438,13 +443,75 @@ it.effect("keeps requeueing a failed claim while the database is locked", () =>
       Layer.provide(Layer.merge(layerOutbox, layerExecutor)),
     );
 
-    yield* EffectWorker.OrchestrationEffectWorkerV2.pipe(
+    const workerFiber = yield* EffectWorker.OrchestrationEffectWorkerV2.pipe(
       Effect.flatMap((worker) => worker.runOnce),
       Effect.provide(layerWorker),
-      Effect.exit,
+      Effect.forkChild,
     );
+    yield* Deferred.await(firstLockTimeout);
+    yield* TestClock.adjust(Duration.millis(99));
+    assert.isFalse(yield* Ref.get(requeued));
+    yield* TestClock.adjust(Duration.seconds(1));
+    yield* Effect.exit(Fiber.join(workerFiber));
 
     assert.isTrue(yield* Ref.get(requeued));
+  }),
+);
+
+it.effect.each([
+  { name: "requeue", request: { type: "provider-runtime.continue", sourceRunId: runId } },
+  { name: "terminalize", request: { type: "provider-turn.start", runId } },
+] as const)("interrupts $name settlement retries when the worker shuts down", ({ request }) =>
+  Effect.gen(function* () {
+    const claimedEffect: EffectOutbox.OrchestrationEffectV2 = {
+      ...restartEffect(yield* DateTime.now, { type: "detach" }),
+      request,
+    };
+    const settlementStarted = yield* Deferred.make<void>();
+    const releaseLock = yield* Ref.make(false);
+    const lockedWrite = Effect.gen(function* () {
+      yield* Deferred.succeed(settlementStarted, undefined);
+      // An in-flight database write can finish its own wait before noticing shutdown.
+      yield* Effect.sleep(Duration.millis(1));
+      if (yield* Ref.get(releaseLock)) return true;
+      return yield* new EffectOutbox.EffectOutboxError({
+        operation: "settlement",
+        effectId: claimedEffect.id,
+        cause: new SqlError.SqlError({ reason: new SqlError.LockTimeoutError({ cause: null }) }),
+      });
+    });
+    const layerOutbox = Layer.mock(EffectOutbox.EffectOutboxV2)({
+      claimNext: () => Effect.succeedSome(claimedEffect),
+      get: () => Effect.succeedSome(claimedEffect),
+      awaitCancellation: () => Effect.never,
+      clearCancellation: () => Effect.void,
+      succeed: () => Effect.fail(new EffectOutbox.EffectOutboxError({ operation: "succeed" })),
+      retry: () => lockedWrite,
+      fail: () => lockedWrite,
+    });
+    const layerExecutor = Layer.succeed(
+      EffectWorker.OrchestrationEffectExecutorV2,
+      EffectWorker.OrchestrationEffectExecutorV2.of({ execute: () => Effect.void }),
+    );
+    const layerWorker = EffectWorker.layerWithOptions({ workerId: "test-worker" }).pipe(
+      Layer.provide(Layer.merge(layerOutbox, layerExecutor)),
+    );
+
+    const daemon = yield* EffectWorker.runDaemonWithOptions({ concurrency: 1 }).pipe(
+      Effect.provide(layerWorker),
+      Effect.forkChild,
+    );
+    yield* Deferred.await(settlementStarted);
+    const shutdown = yield* Fiber.interrupt(daemon).pipe(
+      Effect.timeoutOption(Duration.millis(100)),
+      Effect.forkChild,
+    );
+    yield* TestClock.adjust(Duration.millis(100));
+    const stopped = yield* Fiber.join(shutdown);
+    yield* Ref.set(releaseLock, true);
+    yield* TestClock.adjust(Duration.seconds(1));
+    yield* Fiber.await(daemon);
+    assert.isTrue(Option.isSome(stopped));
   }),
 );
 
